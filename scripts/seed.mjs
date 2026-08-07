@@ -157,9 +157,20 @@ await sql`
   ON CONFLICT (key) DO NOTHING
 `;
 
+// The single v1 user row. Resolved from env so a separate deploy seeds its own
+// owner rather than another instance's; the chain matches resolveMcpOwner()'s
+// (LEDGR_MCP_OWNER_UPN -> ONEDRIVE_EXPORT_UPN), so an instance that already
+// configures either one needs no new variable, and the literal fallback keeps
+// the original behaviour when none are set.
+const ownerEmail =
+  process.env.LEDGR_OWNER_UPN ||
+  process.env.LEDGR_MCP_OWNER_UPN ||
+  process.env.ONEDRIVE_EXPORT_UPN ||
+  "brandoncollins@edgewoodcommunity.org";
+
 await sql`
   INSERT INTO users (email)
-  VALUES ('brandoncollins@edgewoodcommunity.org')
+  VALUES (${ownerEmail})
   ON CONFLICT (email) DO NOTHING
 `;
 
