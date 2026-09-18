@@ -364,7 +364,7 @@ export default function AddTaskCard({
       // just closed; it is never an outside click.
       if (!t.isConnected) return;
       if (cardRef.current?.contains(t)) return;
-      if (t.closest?.("[data-chip-pop],[data-row-menu]")) return;
+      if (t.closest?.("[data-chip-pop],[data-row-menu],[data-capture-header]")) return;
       onCancel();
     };
     document.addEventListener("mousedown", onDown);

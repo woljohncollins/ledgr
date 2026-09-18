@@ -47,15 +47,21 @@ export default function CaptureCard({
     { key: "unmarked", label: "Unsorted" },
     ...(typeOptions ?? []).filter((o) => o.key !== "unmarked"),
   ];
+  // Default to task when the owner captures tasks; otherwise the first type
+  // they DO capture (an instance with only Notes on gets a note card, not a task
+  // card whose type isn't even in the picker). Unsorted is the last resort.
+  const fallbackType = captureOptions.some((o) => o.key === "task")
+    ? "task"
+    : (captureOptions[1]?.key ?? "unmarked");
   const [type, setType] = useState<string>(() => {
-    if (typeof window === "undefined") return "task";
+    if (typeof window === "undefined") return fallbackType;
     try {
       const last = localStorage.getItem("capture:lastType");
       if (last && captureOptions.some((o) => o.key === last)) return last;
     } catch {
       /* storage unavailable */
     }
-    return "task";
+    return fallbackType;
   });
   const chooseType = (next: string) => {
     setType(next);
@@ -68,8 +74,11 @@ export default function CaptureCard({
 
   return (
     <>
-      {/* Type picker header — the choice that makes capture multi-type. */}
-      <div className="mb-2 flex items-center gap-2 rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-2 shadow-lg shadow-black/40">
+      {/* Type picker header — the choice that makes capture multi-type.
+          data-capture-header: AddTaskCard cancels on any mousedown outside its
+          own card, and this header sits outside it — without the marker, opening
+          the type <select> closed the whole modal. */}
+      <div data-capture-header className="mb-2 flex items-center gap-2 rounded-xl border border-neutral-700 bg-neutral-900 px-3 py-2 shadow-lg shadow-black/40">
         <span className="text-xs uppercase tracking-wide text-neutral-500">New</span>
         <span className="relative inline-flex items-center">
           <select
