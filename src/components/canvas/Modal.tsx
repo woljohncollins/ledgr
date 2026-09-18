@@ -13,8 +13,12 @@
 // (the slot stays mounted, the URL doesn't), close just unmounts the panel:
 // back() there would walk the main pane's history instead of closing.
 // Arrow-walk uses router.replace so ↑/↓ browsing the list doesn't grow history.
-// (Making a single back() always return to the list even after clicking through
-// several items inside the peek is a known rough edge, deferred to its own slice.)
+// While the panel owns the URL, ANY navigation to another item is forced to
+// replace, not push — the capture-phase click interceptor below handles anchor
+// clicks (list rows, related rows), and openItem() in src/lib/item-nav.ts
+// handles programmatic pushes (it reads the body[data-item-panel] flag set
+// here) — so history never grows past the launching surface and one back()
+// always closes back to it, no matter how many items were viewed in the panel.
 // Expand is a plain anchor (hard navigation) so the same URL re-renders as the
 // full page form.
 "use client";
@@ -25,6 +29,7 @@ import ConfirmButton from "@/components/ui/ConfirmButton";
 import ItemActionsMenu from "@/components/canvas/ItemActionsMenu";
 import ActionGlyph from "@/components/canvas/action-icons";
 import TypeCue from "@/components/canvas/TypeCue";
+import type { ItemOpenMode } from "@/lib/settings";
 
 // The content region must be at least this wide (px, inside the nav frame) for
 // the peek panel; below it the center modal is the better use of space. Matches
@@ -40,7 +45,9 @@ const PEEK_MIN_CONTENT = 1280;
 // matching the sm breakpoint the nav uses to switch to the floating bar.
 const SHEET_MAX = 640;
 
+// "peek" is the docked side panel; which edge it takes comes from `side` below.
 type Mode = "sheet" | "peek" | "center";
+type Side = "left" | "right";
 
 // Drag-to-resize bounds for the peek panel (px). Min keeps it usefully wide;
 // max never lets it swallow the screen. Persisted under PEEK_WIDTH_KEY so the
@@ -62,15 +69,43 @@ function readStoredPeekWidth(): number | null {
   }
 }
 
-function computeMode(): Mode {
-  if (typeof window === "undefined") return "center";
-  if (window.innerWidth < SHEET_MAX) return "sheet";
+// Decide the shape + which edge a docked panel takes, from the owner's preference
+// narrowed by what the layout can actually do (ADR: item open mode, 2026-08-12).
+//
+// The preference is honored wherever it's physically possible, and only overruled
+// by two hard constraints:
+//   1. Below `sm` there is no room for a side panel — always the bottom sheet.
+//   2. A docked nav rail owns its edge; a panel can't share it. An explicit
+//      left/right that collides with the rail falls back to the OTHER edge if
+//      that one is free, and to the center popup if neither is.
+// "auto" keeps the original measured rule exactly: a right dock when there's
+// ≥1280px of content and no right rail, else the center popup.
+function computeShape(pref: ItemOpenMode): { mode: Mode; side: Side } {
+  if (typeof window === "undefined") return { mode: "center", side: "right" };
+  if (window.innerWidth < SHEET_MAX) return { mode: "sheet", side: "right" };
   const cs = getComputedStyle(document.body);
   const pl = parseFloat(cs.paddingLeft) || 0;
   const pr = parseFloat(cs.paddingRight) || 0;
   const content = window.innerWidth - pl - pr;
-  const rightRail = pr > 8; // a real right-docked rail, not sub-pixel noise
-  return content >= PEEK_MIN_CONTENT && !rightRail ? "peek" : "center";
+  // A real docked rail on that edge, not sub-pixel noise.
+  const leftRail = pl > 8;
+  const rightRail = pr > 8;
+
+  if (pref === "center") return { mode: "center", side: "right" };
+  if (pref === "left" || pref === "right") {
+    const wantLeft = pref === "left";
+    const blocked = wantLeft ? leftRail : rightRail;
+    if (!blocked) return { mode: "peek", side: wantLeft ? "left" : "right" };
+    // Chosen edge is taken by the rail — try the opposite edge before giving up
+    // on the docked shape entirely, since "panel, not popup" is the stronger half
+    // of the preference.
+    const otherBlocked = wantLeft ? rightRail : leftRail;
+    if (!otherBlocked) return { mode: "peek", side: wantLeft ? "right" : "left" };
+    return { mode: "center", side: "right" };
+  }
+  return content >= PEEK_MIN_CONTENT && !rightRail
+    ? { mode: "peek", side: "right" }
+    : { mode: "center", side: "right" };
 }
 
 function isTyping(t: EventTarget | null): boolean {
@@ -91,6 +126,7 @@ export default function Modal({
   isTemplate = false,
   locked = false,
   favorited = false,
+  openMode = "auto",
 }: {
   itemId: string;
   children: React.ReactNode;
@@ -113,6 +149,10 @@ export default function Modal({
   locked?: boolean;
   // Whether the item is in the owner's favorites — drives the menu's star label.
   favorited?: boolean;
+  // The owner's item-open preference (settings.itemOpenMode). Narrowed by the
+  // live layout in computeShape — a phone is always the sheet, and a docked nav
+  // rail wins its edge. Defaults to "auto", the pre-setting measured behavior.
+  openMode?: ItemOpenMode;
 }) {
   const router = useRouter();
   // Whether the URL still points at this item. A soft nav in the main pane
@@ -134,12 +174,17 @@ export default function Modal({
   }, [router, stale]);
   // No reset needed: opening another item swaps loading.tsx into the slot, which
   // remounts this component with a fresh `dismissed`.
-  // sheet (mobile) / peek (wide desktop) / center — decided from the layout on
-  // mount and kept current on resize. Client-only guard makes the SSR pass
-  // (never hit in practice — the @modal slot only fills on a client nav) fall
-  // to center.
-  const [mode, setMode] = useState<Mode>(computeMode);
+  // sheet (mobile) / peek (docked panel) / center — the owner's `openMode`
+  // preference narrowed by the live layout on mount and kept current on resize.
+  // Client-only guard makes the SSR pass (never hit in practice — the @modal slot
+  // only fills on a client nav) fall to center.
+  const [shape, setShape] = useState(() => computeShape(openMode));
+  const mode = shape.mode;
   const peek = mode === "peek";
+  // Which edge the docked panel takes. Drives the dock offset, which border edge
+  // is drawn, and which inner edge carries the resize handle — all three have to
+  // agree or the handle ends up on the outside of the panel.
+  const dockLeft = shape.side === "left";
   // User-chosen peek width in px (null → the responsive default). Lazy-init from
   // localStorage on the client so a restored width shows without a flash (the
   // peek only ever mounts on a client nav). Persisted on drag-end.
@@ -157,18 +202,28 @@ export default function Modal({
       (e.currentTarget as Element).setPointerCapture(e.pointerId);
     } catch {}
   };
+  // Drag-to-widen, in the direction that matches the dock. The handle always sits
+  // on the panel's INNER edge, so "away from the docked edge" is what widens:
+  // dragging left on a right-docked panel, right on a left-docked one. Getting the
+  // sign wrong here makes the panel shrink as you pull it open.
+  const resizeDelta = (clientX: number) => {
+    if (!resizeStart.current) return 0;
+    return dockLeft
+      ? clientX - resizeStart.current.x
+      : resizeStart.current.x - clientX;
+  };
   const onResizeMove = (e: React.PointerEvent) => {
     if (!resizeStart.current) return;
-    // Panel docks right, so dragging the left-edge handle leftward widens it.
-    const delta = resizeStart.current.x - e.clientX;
-    const next = resizeStart.current.w + delta;
+    const next = resizeStart.current.w + resizeDelta(e.clientX);
     setPeekWidth(Math.max(PEEK_MIN_PX, Math.min(peekMaxPx(), next)));
   };
   const onResizeUp = (e: React.PointerEvent) => {
     if (!resizeStart.current) return;
-    const delta = resizeStart.current.x - e.clientX;
     const final = Math.round(
-      Math.max(PEEK_MIN_PX, Math.min(peekMaxPx(), resizeStart.current.w + delta))
+      Math.max(
+        PEEK_MIN_PX,
+        Math.min(peekMaxPx(), resizeStart.current.w + resizeDelta(e.clientX))
+      )
     );
     resizeStart.current = null;
     try {
@@ -199,10 +254,56 @@ export default function Modal({
   const dragFromBody = useRef(false);
 
   useEffect(() => {
-    const onResize = () => setMode(computeMode());
+    const onResize = () => setShape(computeShape(openMode));
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
-  }, []);
+  }, [openMode]);
+
+  // Advertise the open panel to the rest of the app while it owns the URL.
+  // src/lib/item-nav.ts reads this flag to replace instead of push on
+  // programmatic item navigations, keeping close() a single back() to the
+  // launching surface.
+  useEffect(() => {
+    if (stale) return;
+    document.body.dataset.itemPanel = "open";
+    return () => {
+      delete document.body.dataset.itemPanel;
+    };
+  }, [stale]);
+
+  // One close() must always return to the launching surface, no matter how
+  // many items were viewed in the panel (the "close cycles back through every
+  // item" bug). While this panel owns the URL, a plain left-click on any
+  // /items/ link — a background list row, a related-item row, a rendered
+  // mention link — re-renders the panel via replace instead of push, so
+  // history never grows past the launcher. Capture phase beats next/link's
+  // own click handler (Link bails on defaultPrevented). Modified/middle
+  // clicks, target/download links, and data-hard-nav anchors (Expand needs a
+  // real document load) keep their native behavior.
+  useEffect(() => {
+    if (stale) return;
+    const onClickCapture = (e: MouseEvent) => {
+      if (
+        e.button !== 0 ||
+        e.metaKey ||
+        e.ctrlKey ||
+        e.shiftKey ||
+        e.altKey ||
+        e.defaultPrevented
+      )
+        return;
+      const a = (e.target as Element | null)?.closest?.('a[href^="/items/"]');
+      if (!(a instanceof HTMLAnchorElement)) return;
+      if (a.target || a.hasAttribute("download") || a.hasAttribute("data-hard-nav"))
+        return;
+      e.preventDefault();
+      const href = a.getAttribute("href")!;
+      // Same item (e.g. clicking the open item's own row): nothing to do.
+      if (href !== pathname) router.replace(href, { scroll: false });
+    };
+    document.addEventListener("click", onClickCapture, true);
+    return () => document.removeEventListener("click", onClickCapture, true);
+  }, [stale, pathname, router]);
 
   // Lock the page scroll behind a full overlay (sheet or center modal), so a
   // drag on/near the sheet can't scroll the list underneath — the "main page
@@ -369,6 +470,7 @@ export default function Modal({
               intercepted; a document load renders the full page form. */}
           <a
             href={`/items/${itemId}`}
+            data-hard-nav
             className="rounded px-2 py-0.5 text-xs text-ink-subtle hover:bg-surface-2 hover:text-ink"
             title="Expand to full page"
           >
@@ -482,19 +584,28 @@ export default function Modal({
   }
 
   if (peek) {
-    // Docked to the trailing edge of the content region: top/bottom clear a
-    // top/bottom bar, right clears a right rail (0 here since a right rail forces
-    // center). Non-modal — no backdrop, so the list stays live underneath.
+    // Docked to one edge of the content region: top/bottom clear a top/bottom bar,
+    // and the docked edge clears that side's rail (0 unless a rail is there, and
+    // computeShape already refuses an edge a rail occupies). Non-modal — no
+    // backdrop, so the list stays live underneath.
+    //
+    // The three edge-dependent details have to agree: the dock offset, the border
+    // (drawn on the panel's inner side, facing the content), and the resize handle
+    // (also inner). A left dock mirrors all three.
     return (
       <div
         ref={panelRef}
         role="dialog"
         aria-label={title || "Item"}
-        className="fixed z-40 flex flex-col overflow-hidden border-l border-line-strong bg-surface-2 shadow-2xl shadow-black/50"
+        className={`fixed z-40 flex flex-col overflow-hidden bg-surface-2 shadow-2xl shadow-black/50 ${
+          dockLeft ? "border-r border-line-strong" : "border-l border-line-strong"
+        }`}
         style={{
           top: "var(--nav-pt, 0px)",
           bottom: "var(--nav-pb, 0px)",
-          right: "var(--nav-pr, 0px)",
+          ...(dockLeft
+            ? { left: "var(--nav-pl, 0px)" }
+            : { right: "var(--nav-pr, 0px)" }),
           // A dragged width wins (persisted); otherwise the responsive default:
           // non-wide holds the ~48rem canvas column comfortably (up from 34rem,
           // which squished it); wide (song chord charts) stays roomier. The vw
@@ -508,10 +619,11 @@ export default function Modal({
                 : "min(52rem, 46vw)",
         }}
       >
-        {/* Drag handle on the panel's left (inner) edge — the resizable one,
-            since the peek docks right. A 6px hit strip along the full height;
-            the visible hairline brightens on hover/drag. touch-none so a touch
-            drag resizes instead of scrolling. Double-click resets to default. */}
+        {/* Drag handle on the panel's INNER edge — the one facing the content, so
+            it's the resizable one: right edge when docked left, left edge when
+            docked right. A 6px hit strip along the full height; the visible
+            hairline brightens on hover/drag. touch-none so a touch drag resizes
+            instead of scrolling. Double-click resets to default. */}
         <div
           role="separator"
           aria-orientation="vertical"
@@ -522,11 +634,15 @@ export default function Modal({
           onPointerUp={onResizeUp}
           onPointerCancel={onResizeUp}
           onDoubleClick={onResizeReset}
-          className="group absolute inset-y-0 left-0 z-10 w-1.5 cursor-col-resize touch-none select-none"
+          className={`group absolute inset-y-0 z-10 w-1.5 cursor-col-resize touch-none select-none ${
+            dockLeft ? "right-0" : "left-0"
+          }`}
         >
           <span
             aria-hidden
-            className="absolute inset-y-0 left-0 w-px bg-transparent transition-colors group-hover:bg-[var(--accent,#2563eb)]"
+            className={`absolute inset-y-0 w-px bg-transparent transition-colors group-hover:bg-[var(--accent,#2563eb)] ${
+              dockLeft ? "right-0" : "left-0"
+            }`}
           />
         </div>
         {panel}

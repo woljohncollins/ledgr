@@ -14,11 +14,21 @@ import type { PropertyDef } from "@/lib/types";
 import type { WhereGroup } from "@/lib/view-where";
 import { CALENDAR_MODES, TIMELINE_ZOOMS } from "@/lib/views";
 import type { ColumnField, ViewColumn, ViewDefinition, ViewDisplay, CalendarMode, TimelineZoom } from "@/lib/views";
+import {
+  DEFAULT_PROJECT_CARD,
+  PROJECT_CARD_ELEMENTS,
+  type ProjectCardElement,
+} from "@/lib/project-card-config";
 
 // Friendly labels for the calendar-display controls (ADR-166). "timegrid"
 // (Multi-day) is retired from new views but kept selectable when a stored view
 // already uses it, so editing round-trips it rather than silently flipping it.
-const MODE_LABELS: Record<CalendarMode, string> = { month: "Month", timegrid: "Multi-day (legacy)", timeline: "Timeline" };
+const MODE_LABELS: Record<CalendarMode, string> = {
+  month: "Month",
+  timegrid: "Multi-day (legacy)",
+  timeline: "Timeline",
+  spine: "History (vertical)",
+};
 const ZOOM_LABELS: Record<TimelineZoom, string> = {
   hour: "Hour", day: "Day", week: "Week", month: "Month", quarter: "Quarter", year: "Year", halfDecade: "5-Year",
 };
@@ -92,9 +102,14 @@ function groupFieldsFor(type: string): string[] {
 const showsUrgency = (type: string) => type === "task" || type === "";
 
 // Columns are offered for the row-based layouts (list/table/agenda); board and
-// calendar have their own card shapes and ignore the column choice.
-const showsColumns = (layout: string) =>
-  layout === "list" || layout === "table" || layout === "agenda";
+// calendar have their own card shapes and ignore the column choice. The one
+// calendar exception is the History spine, which renders the chosen columns as
+// each entry's second line (a work log reads its category that way).
+const showsColumns = (layout: string, mode?: string) =>
+  layout === "list" ||
+  layout === "table" ||
+  layout === "agenda" ||
+  (layout === "calendar" && mode === "spine");
 
 // Built-in field columns offered for a type, mirroring which fields that type
 // actually has (the same discipline as the date/sort selects above).
@@ -167,11 +182,40 @@ export default function ViewBuilder({
   // A type's select/multi_select properties, as group-by options encoded
   // "prop:<key>" so they share the one Group-by control with the built-in
   // fields. A board grouped by one of these reads as a workflow board.
-  function groupPropsFor(typeKey: string): { value: string; label: string }[] {
+  function groupPropsFor(
+    typeKey: string
+  ): { value: string; label: string; suffix: string }[] {
     const schema = types.find((t) => t.key === typeKey)?.propertySchema ?? [];
-    return schema
-      .filter((p) => p.kind === "select" || p.kind === "multi_select")
-      .map((p) => ({ value: `prop:${p.key}`, label: p.label }));
+    return [
+      ...schema
+        .filter((p) => p.kind === "select" || p.kind === "multi_select")
+        .map((p) => ({ value: `prop:${p.key}`, label: p.label, suffix: "field" })),
+      // Relation fields (Tags, and any other the owner declares) encoded
+      // "rel:<role>" — this is how "group my tasks by tag" becomes a saved view
+      // (Tyler, 2026-08-12). A relation grouping FANS OUT, so a task with two tags
+      // shows in both columns, and the board is read-only (a tag column can't be
+      // dropped into — moving edges isn't the PATCH a drop writes).
+      ...schema
+        .filter((p) => p.kind === "relation")
+        .map((p) => ({ value: `rel:${p.key}`, label: p.label, suffix: "links" })),
+    ];
+  }
+  // The type's own `date` properties, offered beside the built-in date fields so
+  // a bespoke type can be placed by the date it actually keeps (a work log's
+  // `logdate`). Stored as display.startField ({prop}), the engine's DateRef,
+  // which placement.ts has always read but nothing could set until now. Encoded
+  // "prop:<key>", the Sort control's convention.
+  function datePropsFor(typeKey: string): { key: string; label: string }[] {
+    const schema = types.find((t) => t.key === typeKey)?.propertySchema ?? [];
+    return schema.filter((p) => p.kind === "date").map((p) => ({ key: p.key, label: p.label }));
+  }
+  function datePlacementFor(typeKey: string): string[] {
+    return [...dateFieldsFor(typeKey), ...datePropsFor(typeKey).map((p) => `prop:${p.key}`)];
+  }
+  function datePlacementLabel(typeKey: string, value: string): string {
+    if (!value.startsWith("prop:")) return DATE_LABELS[value] ?? value;
+    const key = value.slice(5);
+    return datePropsFor(typeKey).find((p) => p.key === key)?.label ?? key;
   }
   // The type's custom properties, offered as property columns.
   function propColumnsFor(typeKey: string): { key: string; label: string }[] {
@@ -242,7 +286,13 @@ export default function ViewBuilder({
   // The stored grouping is {field} or {propertyKey}; collapse to the control's
   // string form ("status" | "prop:stage").
   const groupingToValue = (g: ViewDefinition["grouping"] | undefined): string =>
-    g ? ("propertyKey" in g ? `prop:${g.propertyKey}` : g.field) : "";
+    g
+      ? "propertyKey" in g
+        ? `prop:${g.propertyKey}`
+        : "relationRole" in g
+          ? `rel:${g.relationRole}`
+          : g.field
+      : "";
   const router = useRouter();
   // Clamp anything the stored definition holds that's no longer valid for its
   // type (e.g. a legacy meeting calendar saved with date field "due date"):
@@ -299,9 +349,11 @@ export default function ViewBuilder({
   const [groupField, setGroupField] = useState<string>(
     validGroup(t0, groupingToValue(initial?.grouping))
   );
-  const [dateProperty, setDateProperty] = useState<string>(
-    pick(df0, initial?.dateProperty, df0[0])
-  );
+  const [dateProperty, setDateProperty] = useState<string>(() => {
+    const sf = initial?.display?.startField;
+    if (sf && "prop" in sf) return `prop:${sf.prop}`;
+    return pick(datePlacementFor(t0), initial?.dateProperty, df0[0]);
+  });
   // Calendar display defaults (ADR-166): the mode a calendar view opens in and,
   // for the Timeline, its initial zoom. Stored in views.display; null → defaults.
   const [calMode, setCalMode] = useState<CalendarMode>(initial?.display?.mode ?? "month");
@@ -312,6 +364,13 @@ export default function ViewBuilder({
   // Chosen columns, in order; empty = the layout's default columns. Toggling
   // appends (so check order = column order) or removes.
   const [columns, setColumns] = useState<ViewColumn[]>(initial?.columns ?? []);
+  // Project cards (2026-08-17): whether THIS view overrides the type-default
+  // card, and with which elements. Applies only to a project-scoped list/board
+  // view; stored as views.display.card (null/absent = inherit the type default).
+  const [cardCustom, setCardCustom] = useState<boolean>(initial?.display?.card != null);
+  const [cardShow, setCardShow] = useState<ProjectCardElement[]>(
+    initial?.display?.card?.show ?? [...DEFAULT_PROJECT_CARD.show]
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -327,6 +386,8 @@ export default function ViewBuilder({
 
   const needsDate = layout === "calendar" || layout === "agenda";
   const canGroup = layout === "board" || layout === "agenda";
+  // Project cards render on project-scoped list/board views (2026-08-17).
+  const cardApplies = type === "project" && (layout === "list" || layout === "board");
   const dateFields = dateFieldsFor(type);
   const sortFields = sortFieldsFor(type);
   const groupFields = groupFieldsFor(type).filter(
@@ -339,7 +400,8 @@ export default function ViewBuilder({
     setType(t);
     const df = dateFieldsFor(t);
     setDateField((v) => (df.includes(v) ? v : df[0]));
-    setDateProperty((v) => (df.includes(v) ? v : df[0]));
+    const dp = datePlacementFor(t);
+    setDateProperty((v) => (dp.includes(v) ? v : df[0]));
     setSortField((v) => {
       if (v.startsWith("prop:")) {
         return sortPropsFor(t).some((p) => `prop:${p.key}` === v) ? v : "updatedAt";
@@ -432,16 +494,35 @@ export default function ViewBuilder({
         canGroup && groupField
           ? groupField.startsWith("prop:")
             ? { propertyKey: groupField.slice(5) }
-            : { field: groupField }
+            : groupField.startsWith("rel:")
+              ? { relationRole: groupField.slice(4) }
+              : { field: groupField }
           : null,
-      columns: showsColumns(layout) && columns.length ? columns : null,
-      dateProperty: needsDate ? dateProperty : null,
-      // Preserve any other display fields the view already had (dayCount, etc.)
-      // and overlay the calendar mode + timeline zoom this builder edits.
-      display:
-        layout === "calendar"
-          ? ({ ...(initial?.display ?? {}), mode: calMode, zoom: calZoom } as ViewDisplay)
-          : initial?.display ?? null,
+      columns: showsColumns(layout, calMode) && columns.length ? columns : null,
+      // dateProperty names a BUILT-IN field only; a custom date property rides
+      // display.startField below, so the two never both claim the placement.
+      dateProperty: needsDate && !dateProperty.startsWith("prop:") ? dateProperty : null,
+      // Preserve any other display fields the view already had (dayCount, etc.),
+      // overlay the calendar mode + timeline zoom on a calendar layout, and set
+      // or clear the project-card override this builder edits. An empty display
+      // collapses to null so a plain view stores nothing.
+      display: (() => {
+        const d = { ...(initial?.display ?? {}) } as ViewDisplay;
+        if (layout === "calendar") {
+          d.mode = calMode;
+          d.zoom = calZoom;
+        }
+        if (needsDate && dateProperty.startsWith("prop:")) {
+          d.startField = { prop: dateProperty.slice(5) };
+        } else if (needsDate) {
+          // Clear a stale custom-property placement, or it would keep winning
+          // over the built-in field the owner just chose.
+          delete d.startField;
+        }
+        if (cardApplies && cardCustom) d.card = { show: cardShow };
+        else delete d.card;
+        return Object.keys(d).length ? d : null;
+      })(),
     };
     try {
       const res = await fetch(
@@ -694,13 +775,13 @@ export default function ViewBuilder({
               <Opt key={g} value={g} label={GROUP_LABELS[g]} />
             ))}
             {groupPropsFor(type).map((o) => (
-              <Opt key={o.value} value={o.value} label={`${o.label} (field)`} />
+              <Opt key={o.value} value={o.value} label={`${o.label} (${o.suffix})`} />
             ))}
           </select>
         </Field>
       )}
 
-      {showsColumns(layout) && (
+      {showsColumns(layout, calMode) && (
         <fieldset className="flex flex-col gap-2 rounded-lg border border-neutral-800 p-3">
           <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-neutral-500">
             Columns
@@ -743,18 +824,59 @@ export default function ViewBuilder({
         </fieldset>
       )}
 
+      {cardApplies && (
+        <fieldset className="flex flex-col gap-2 rounded-lg border border-neutral-800 p-3">
+          <legend className="px-1 text-xs font-semibold uppercase tracking-wide text-neutral-500">
+            Project cards
+          </legend>
+          <p className="text-xs text-neutral-600">
+            This view renders projects as rich cards. By default it uses the
+            card set from Build → Types → Project; customize to pick a
+            different set just for this view.
+          </p>
+          <label className="flex items-center gap-2 text-sm text-neutral-300">
+            <input
+              type="checkbox"
+              className="ledgr-check ledgr-check-sm"
+              checked={cardCustom}
+              onChange={(e) => setCardCustom(e.target.checked)}
+            />
+            Customize card elements for this view
+          </label>
+          {cardCustom && (
+            <div className="flex flex-col gap-1.5 pl-6">
+              {PROJECT_CARD_ELEMENTS.map((el) => (
+                <label key={el.key} className="flex items-center gap-2 text-sm text-neutral-300">
+                  <input
+                    type="checkbox"
+                    className="ledgr-check ledgr-check-sm"
+                    checked={cardShow.includes(el.key)}
+                    onChange={() =>
+                      setCardShow((s) =>
+                        s.includes(el.key) ? s.filter((x) => x !== el.key) : [...s, el.key]
+                      )
+                    }
+                  />
+                  {el.label}
+                </label>
+              ))}
+            </div>
+          )}
+        </fieldset>
+      )}
+
       {needsDate && (
         <Field
           label="Date field"
-          hint={`Which date places items on the ${layout}.`}
+          hint={`Which date places items on the ${layout}. A type's own date properties are offered too.`}
         >
           <select
             value={dateProperty}
             onChange={(e) => setDateProperty(e.target.value)}
             className={selectClass}
           >
-            {dateFields.map((d) => (
-              <Opt key={d} value={d} label={DATE_LABELS[d]} />
+            {datePlacementFor(type).map((d) => (
+              <Opt key={d} value={d} label={datePlacementLabel(type, d)} />
             ))}
           </select>
         </Field>
@@ -763,7 +885,7 @@ export default function ViewBuilder({
       {layout === "calendar" && (
         <Field
           label="Default view"
-          hint="How this calendar opens. Month is the grid; Timeline is a zoomable horizontal axis where any writable date can be dragged."
+          hint="How this calendar opens. Month is the grid; Timeline is a zoomable horizontal axis where any writable date can be dragged; History is a read-only vertical spine that scrolls through time."
         >
           <select
             value={calMode}
@@ -777,10 +899,14 @@ export default function ViewBuilder({
         </Field>
       )}
 
-      {layout === "calendar" && calMode === "timeline" && (
+      {layout === "calendar" && (calMode === "timeline" || calMode === "spine") && (
         <Field
-          label="Timeline zoom"
-          hint="The span the timeline shows at first. You can still zoom in and out inside the view."
+          label={calMode === "spine" ? "Group by" : "Timeline zoom"}
+          hint={
+            calMode === "spine"
+              ? "How much time each chip on the spine covers. Every grain is offered on every type; a type whose dates are calendar days simply groups by day at the finest setting."
+              : "The span the timeline shows at first. You can still zoom in and out inside the view."
+          }
         >
           <select
             value={calZoom}

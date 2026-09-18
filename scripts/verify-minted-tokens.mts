@@ -72,4 +72,63 @@ assert.equal(verifyClipperToken(bearer(tampered)), null, "tampered signature rej
 const expired = issueAccessToken(SUB, "api", -10, process.env.LEDGR_CLIPPER_SECRET);
 assert.equal(verifyClipperToken(bearer(expired)), null, "expired token rejected");
 
+// --- ADR-179: app tokens, the third purpose ---------------------------------
+// Same three properties as above, plus the label. Runs last because the block
+// above deliberately leaves the oauth/clipper secrets rotated — an app token
+// surviving that is itself part of the isolation proof.
+process.env.LEDGR_APP_SECRET = "app-secret-eeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+
+const {
+  signAppToken,
+  verifyAppToken,
+  appConfigured,
+  isValidTokenLabel,
+} = await import("../src/lib/auth/oauth.js");
+
+assert.equal(appConfigured(), true, "app configured when secret set");
+
+// 6. Roundtrip + the label rides inside the token and names the caller.
+const app = signAppToken(SUB, "overtone");
+assert.equal(verifyAppToken(bearer(app))?.sub, SUB, "app token verifies");
+assert.equal(verifyAppToken(bearer(app))?.lbl, "overtone", "label round-trips");
+assert.equal(
+  verifyApiToken(bearer(app))?.name,
+  "app:overtone",
+  "verifyApiToken names the caller from the label"
+);
+assert.ok(
+  verifyApiToken(bearer(app))?.scopes.includes("api"),
+  "app token carries the api scope"
+);
+
+// 7. Isolation from the other two purposes, in both directions.
+assert.equal(verifyClipperToken(bearer(app)), null, "app token rejected as clipper");
+assert.equal(verifyAccessToken(bearer(app), MCP_SCOPE), null, "app token rejected on mcp scope");
+assert.equal(verifyAppToken(bearer(freshClip)), null, "clipper token rejected as app");
+
+// 8. THE property this ADR adds: rotating the app secret kills every app token
+//    while the clipper (its own secret) keeps working — Overtone is revocable
+//    without touching the clipper.
+const clipStillGood = signClipperToken(SUB);
+process.env.LEDGR_APP_SECRET = "app-secret-ROTATED-ffffffffffffffffffffff";
+assert.equal(verifyAppToken(bearer(app)), null, "app token dies after app-secret rotation");
+assert.equal(
+  verifyClipperToken(bearer(clipStillGood))?.sub,
+  SUB,
+  "clipper token unaffected by app-secret rotation"
+);
+
+// 9. Label validation — the rule mirrors make-token.mjs's name rule.
+assert.equal(isValidTokenLabel("overtone"), true, "plain label ok");
+assert.equal(isValidTokenLabel("over-tone-2"), true, "hyphens + digits ok");
+assert.equal(isValidTokenLabel(""), false, "empty label rejected");
+assert.equal(isValidTokenLabel("Overtone"), false, "uppercase rejected");
+assert.equal(isValidTokenLabel("over tone"), false, "space rejected");
+assert.equal(isValidTokenLabel("a".repeat(33)), false, "over-length rejected");
+assert.throws(() => signAppToken(SUB, "Bad Label"), "signAppToken refuses a bad label");
+
+// 10. A pre-ADR-179 token (no label) still verifies and reports a bare name.
+const unlabeled = issueAccessToken(SUB, "api", 3600, process.env.LEDGR_APP_SECRET);
+assert.equal(verifyApiToken(bearer(unlabeled))?.name, "app", "unlabeled app token → name 'app'");
+
 console.log("verify-minted-tokens: all assertions passed ✓");

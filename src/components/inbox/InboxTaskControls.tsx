@@ -141,7 +141,7 @@ export default function InboxTaskControls({
                 value={dispSched ? dispSched.toISOString().slice(0, 10) : null}
                 onCommit={schedule}
                 ariaLabel="Scheduled date"
-                className="rounded border border-line bg-surface-1 px-1 py-0.5 text-xs text-ink [color-scheme:dark]"
+                className="rounded border border-line bg-surface-1 px-1 py-0.5 text-xs text-ink"
               />
             </label>
             {dateLabel && (

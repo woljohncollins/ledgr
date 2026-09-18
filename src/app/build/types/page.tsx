@@ -5,16 +5,28 @@
 // type" affordance and a pointer to the bespoke-tool catalog.
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import TypeQuickCaptureToggle from "@/components/build/TypeQuickCaptureToggle";
-import TypeVisibilityToggle from "@/components/build/TypeVisibilityToggle";
+import TypeSettingsRow from "@/components/build/TypeSettingsRow";
 import { attachableCapabilities } from "@/lib/modules";
 // Side-effect: register the workflow modules so their capabilities show in the
 // hint card below (same import the catalog page uses).
 import "@/lib/modules/register";
 import { resolveOwner } from "@/lib/owner";
+import { resolveStatusSchema, type StatusMode } from "@/lib/status";
 import { listTypes } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
+
+// A one-glance summary of how a type tracks completion, so the row advertises
+// that its status TERMS are editable behind it (ADR-181 — the panel existed since
+// ADR-106/082 but nothing pointed at it from the index). Named stages read as
+// their count, since the labels themselves are too long for a row badge; a
+// checkbox type says so; a type with no status shows nothing.
+function statusHint(t: { statusMode: StatusMode; statusSchema: unknown }): string | null {
+  if (t.statusMode === "none") return null;
+  if (t.statusMode === "checkbox") return "done checkbox";
+  const n = resolveStatusSchema(t.statusSchema as never).length;
+  return `${n} status${n === 1 ? "" : "es"}`;
+}
 
 export default async function BuildTypes() {
   const owner = await resolveOwner();
@@ -40,80 +52,26 @@ export default async function BuildTypes() {
         </div>
         <p className="mt-1 text-sm text-neutral-500">
           The shapes your items take. Each type carries its own custom fields.
-          Hide a built-in you don&rsquo;t use with the eye; it stays out of
+          Click a row to open its settings — quick capture, Listen, and
+          visibility. Hide a built-in you don&rsquo;t use; it stays out of
           capture, menus, and tabs without deleting anything.
         </p>
 
-        {/* Column header — gives the list its table feel and labels the two
-            control columns. */}
-        <div className="mt-6 flex items-center gap-3 px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-600">
-          <span className="min-w-0 flex-1">Type</span>
-          {/* Hover tooltip explaining the column (CSS group-hover, no JS). */}
-          <span className="group relative flex w-24 cursor-help items-center justify-center text-center">
-            <span className="underline decoration-dotted decoration-neutral-600 underline-offset-2">
-              Quick capture
-            </span>
-            <span
-              role="tooltip"
-              className="pointer-events-none absolute right-0 top-full z-20 mt-1 w-60 rounded-lg border border-neutral-700 bg-neutral-900 px-3 py-2 text-left text-xs font-normal normal-case leading-snug tracking-normal text-neutral-300 opacity-0 shadow-xl shadow-black/50 transition-opacity duration-150 group-hover:opacity-100"
-            >
-              Checked types show in the{" "}
-              <span className="font-medium text-neutral-100">New (+)</span>{" "}
-              quick-capture menu, so you can jot one down in a tap. Uncheck a type
-              to keep it out of that menu.
-            </span>
-          </span>
-          <span className="w-10 text-center">Show</span>
-        </div>
-
-        <ul className="flex flex-col gap-1">
-          {types.map((t) => {
-            const count = t.propertySchema.length;
-            return (
-              <li
-                key={t.key}
-                className={`flex items-center gap-3 rounded px-2 py-2 hover:bg-neutral-800/60 ${
-                  t.hidden ? "opacity-50" : ""
-                }`}
-              >
-                <Link
-                  href={`/build/types/${t.key}/edit`}
-                  className="group flex min-w-0 flex-1 items-center gap-3"
-                >
-                  <span className="min-w-0 flex-1 truncate text-sm text-neutral-200">
-                    {t.label}
-                  </span>
-                  <span className="shrink-0 font-mono text-xs text-neutral-600">
-                    {t.key}
-                  </span>
-                  {count > 0 && (
-                    <span className="shrink-0 rounded bg-neutral-800 px-1.5 py-0.5 text-xs text-neutral-400">
-                      {count} field{count === 1 ? "" : "s"}
-                    </span>
-                  )}
-                  {t.isSystem && (
-                    <span className="shrink-0 text-xs text-neutral-600">
-                      built-in
-                    </span>
-                  )}
-                  {t.hidden && (
-                    <span className="shrink-0 text-xs text-neutral-500">
-                      hidden
-                    </span>
-                  )}
-                </Link>
-                <span className="flex w-24 justify-center">
-                  <TypeQuickCaptureToggle
-                    typeKey={t.key}
-                    showInQuickCapture={t.showInQuickCapture}
-                  />
-                </span>
-                <span className="flex w-10 justify-center">
-                  <TypeVisibilityToggle typeKey={t.key} hidden={t.hidden} />
-                </span>
-              </li>
-            );
-          })}
+        <ul className="mt-6 flex flex-col gap-1">
+          {types.map((t) => (
+            <TypeSettingsRow
+              key={t.key}
+              typeKey={t.key}
+              label={t.label}
+              fieldCount={t.propertySchema.length}
+              statusHint={statusHint(t)}
+              isSystem={t.isSystem}
+              hidden={t.hidden}
+              showInQuickCapture={t.showInQuickCapture}
+              listenEnabled={t.listenEnabled}
+              listenOpenInEdge={t.listenOpenInEdge}
+            />
+          ))}
         </ul>
 
         {/* Subtle "create" affordance at the foot of the list — quiet until you

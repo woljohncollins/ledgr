@@ -193,7 +193,16 @@ export function ensureAnchorAtPos(editor: Editor, pos: number): string | null {
   const existing = blockIdOf(block.textContent);
   if (existing) return existing;
   const id = uniqueBlockId(editor.getMarkdown());
-  editor.chain().insertContentAt($pos.end(), ` ^${id}`).run();
+  // updateSelection:false — the caret must NOT follow the anchor to the end of
+  // the line. It did, and on a line ending in an "@mention" that dropped the
+  // cursor inside the mention token, waking the editor's mention autocomplete
+  // right on top of the promote popup (a stray click then created a junk item
+  // named after the anchor). The anchor is bookkeeping; it shouldn't move the
+  // user's cursor at all.
+  editor
+    .chain()
+    .insertContentAt($pos.end(), ` ^${id}`, { updateSelection: false })
+    .run();
   return id;
 }
 

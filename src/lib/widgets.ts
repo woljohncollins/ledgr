@@ -53,6 +53,21 @@ export const WIDGET_CATALOG: WidgetDefinition[] = [
     hideOnDisable: false,
   },
   {
+    // The type's own custom fields on a widget-home record. Without this, a
+    // Project's scalar and relation properties had nowhere to render at all:
+    // WidgetCanvas renders neither CustomProperties nor RelationProperties, so a
+    // field added in Build was invisible and uneditable on every record that
+    // used it (found 2026-09-14, a Scope select on Project). Catalog-level, not
+    // Project-specific, because every widget-home type has the same hole.
+    id: "properties",
+    label: "Properties",
+    kind: "property",
+    requires: ["custom_properties"],
+    cardinality: "one",
+    scope: ["record"],
+    hideOnDisable: false,
+  },
+  {
     id: "status",
     label: "Status",
     kind: "property",
@@ -69,6 +84,13 @@ export const WIDGET_CATALOG: WidgetDefinition[] = [
     cardinality: "many",
     scope: ["record", "query"],
     hideOnDisable: true,
+    options: {
+      // Optional grouping for a record's task list (Tyler, 2026-08-17):
+      // "milestone" sections tasks under the milestone they complete,
+      // "priority" under P1–P6. Off by default; set from the card's hover gear
+      // and honored by the full collection page too.
+      groupBy: { kind: "select", label: "Group by", choices: ["none", "milestone", "priority"], default: "none" },
+    },
     recordQuery: { collectionType: "task", role: "project" },
   },
   {
@@ -197,12 +219,72 @@ export const WIDGET_CATALOG: WidgetDefinition[] = [
     hideOnDisable: false,
     recordQuery: { derived: "timeline" },
   },
+  {
+    // Files (ADR-236): the record's ATTACHMENTS — the one card backed by the
+    // attachments table rather than items, hence "derived" with no
+    // collectionType. Upload / open / share / remove ride the shared FilePanel.
+    id: "files",
+    label: "Files",
+    kind: "derived",
+    requires: ["files"],
+    cardinality: "many",
+    scope: ["record"],
+    hideOnDisable: true,
+    recordQuery: { derived: "files" },
+  },
 ];
 
 const BY_ID = new Map(WIDGET_CATALOG.map((w) => [w.id, w]));
 
+// --- Custom-type tools (Tyler, 2026-08-17) -----------------------------------
+// Any owner-created type can be OFFERED AS A TOOL on widget-home records: a
+// "Chapter" type becomes a Chapters card on a Book project, with its own typed
+// "+ Add". The definition is SYNTHETIC — derived from the type key on demand
+// (id "collection:<key>") rather than registered in the catalog — so the
+// catalog stays a pure constant and a stored composition referencing one keeps
+// resolving forever (reconcileComposition never drops it, even while the type
+// is un-offered; the type being deleted is what retires the card, at fan-out).
+// Which types are offered lives in settings.toolTypes (owner UI prefs, the
+// listTabs/cardsByType posture); src/lib/custom-tools.ts resolves labels.
+export const CUSTOM_TOOL_PREFIX = "collection:";
+
+// The type keys already covered by a built-in catalog tool (derived, not
+// hand-listed) — offering these as custom tools would render the card twice.
+export const BUILTIN_TOOL_TYPE_KEYS: ReadonlySet<string> = new Set(
+  WIDGET_CATALOG.map((w) => w.recordQuery?.collectionType).filter(
+    (k): k is string => Boolean(k)
+  )
+);
+
+// The type key inside a synthetic tool id, or null when the id isn't one (or
+// isn't slug-shaped — the same shape the types table enforces on keys).
+export function customToolTypeKey(id: string): string | null {
+  if (!id.startsWith(CUSTOM_TOOL_PREFIX)) return null;
+  const key = id.slice(CUSTOM_TOOL_PREFIX.length);
+  return /^[a-z][a-z0-9_]*$/.test(key) ? key : null;
+}
+
+// Build the synthetic definition. `label` defaults to a readable form of the
+// key; callers with the type registry in hand (custom-tools.ts, the fan-out)
+// pass the type's real label.
+export function customCollectionWidget(typeKey: string, label?: string): WidgetDefinition {
+  return {
+    id: `${CUSTOM_TOOL_PREFIX}${typeKey}`,
+    label: label ?? typeKey.charAt(0).toUpperCase() + typeKey.slice(1).replace(/_/g, " "),
+    kind: "collection",
+    requires: [], // always satisfiable: any record can contain any collection
+    cardinality: "many",
+    scope: ["record"],
+    hideOnDisable: true,
+    recordQuery: { collectionType: typeKey, role: "contains" },
+  };
+}
+
 export function widgetById(id: string): WidgetDefinition | undefined {
-  return BY_ID.get(id);
+  const hit = BY_ID.get(id);
+  if (hit) return hit;
+  const key = customToolTypeKey(id);
+  return key ? customCollectionWidget(key) : undefined;
 }
 
 // Layer 1 availability (derived). A `requires` entry is satisfiable when:
@@ -218,6 +300,7 @@ export function widgetById(id: string): WidgetDefinition | undefined {
 // type-capability gate has one place to live.
 const SATISFIABLE = new Set<string>([
   "overview_md",
+  "custom_properties",
   "status",
   "tasks",
   "notes",
@@ -228,6 +311,7 @@ const SATISFIABLE = new Set<string>([
   "mindmap",
   "relationships",
   "activity_log",
+  "files",
 ]);
 
 export function isSatisfiable(requirement: string): boolean {

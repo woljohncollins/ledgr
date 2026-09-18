@@ -8,25 +8,26 @@
 import { sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { getItem, ItemError } from "@/lib/items";
-import { createItem } from "@/lib/item-mutations";
-import { makeMarkdownBody } from "@/lib/body";
+import { createItem, type ItemInput } from "@/lib/item-mutations";
 import { relateItems } from "@/lib/relations";
 import { getMeetingPeople } from "./prep";
 
 export type PromoteOptions = {
-  // Markdown for the new task's body (e.g. the line's sub-bullets pulled in).
-  body?: string;
   // The source line's ^id anchor (ADR-090), stored as properties.source.blockRef.
   blockRef?: string;
+  // Extra edges the capture card already resolved (a "+project" destination,
+  // "@"-linked items, existing tags) — the same `relateTo` the create route
+  // takes, written alongside the meeting/people edges below.
+  relateTo?: { targetId: string; role?: string }[];
 };
 
 export async function promoteActionItem(
   ownerId: string,
   meetingId: string,
-  title: string,
+  input: ItemInput,
   opts: PromoteOptions = {}
 ) {
-  const trimmed = title.trim();
+  const trimmed = (input.title ?? "").trim();
   if (!trimmed) throw new ItemError("bad_request", "task title is required");
 
   // Ownership + existence (also gives the type for a friendlier guard).
@@ -41,34 +42,42 @@ export async function promoteActionItem(
   };
   if (opts.blockRef) source.blockRef = opts.blockRef;
 
-  const bodyMarkdown = opts.body?.trim() ? opts.body : "";
-
+  // Everything the capture card parsed out of the line — due/scheduled date,
+  // priority, recurrence, custom properties, the description — rides through
+  // unchanged; only the type, the source, and inbox are ours to decide.
   const task = await createItem(ownerId, {
+    ...input,
     type: "task",
     title: trimmed,
     // Status defaults to the type's not-started status (createItem, S2).
     // It's a deliberate promotion, not an untriaged arrival (ADR-010).
     inbox: false,
-    ...(bodyMarkdown ? { body: makeMarkdownBody(bodyMarkdown) } : {}),
-    properties: { source },
+    properties: {
+      ...((input.properties as Record<string, unknown> | undefined) ?? {}),
+      source,
+    },
   });
 
   // Relate task -> meeting (confirmed; it's a deliberate manual-equivalent
   // act), then task -> each of the meeting's people, so the task lands in
-  // that person's open-task list. Edge failures (a since-deleted person)
-  // don't undo the task.
-  await relateItems(ownerId, task.id, meetingId);
+  // that person's open-task list, then the card's own edges. Edge failures
+  // (a since-deleted person) don't undo the task.
   const people = await getMeetingPeople(ownerId, meetingId);
-  for (const e of people) {
+  const edges: { targetId: string; role?: string }[] = [
+    { targetId: meetingId },
+    ...people.map((e) => ({ targetId: e.id })),
+    ...(opts.relateTo ?? []).slice(0, 20),
+  ];
+  const relateErrors: string[] = [];
+  for (const e of edges) {
     try {
-      await relateItems(ownerId, task.id, e.id);
-    } catch {
-      /* skip a person that can't be related; the task + meeting link stand */
+      await relateItems(ownerId, task.id, e.targetId, e.role);
+    } catch (err) {
+      relateErrors.push(err instanceof Error ? err.message : "relate failed");
     }
   }
-  return task;
+  return { task, relateErrors };
 }
-
 // The meeting's promoted lines: a map of source-line anchor (`^id`) → the task
 // it produced (ADR-090). Drives the editor's "✓ task" badge — which line shows
 // a promoted marker, and what it links to. Owner-scoped; index-friendly

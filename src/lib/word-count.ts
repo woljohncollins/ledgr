@@ -16,16 +16,29 @@ import { wordCountOf } from "@/lib/body";
 const RECOUNT_MS = 800;
 
 // Scoped by item id: a canvas modal open over an item page mounts a second
-// chrome, and neither should show the other item's count.
-let current: { itemId: string; count: number } | null = null;
+// chrome, and neither should show the other item's count. `perTab` marks a
+// count that covers only the ACTIVE canvas tab (ADR-095) rather than the whole
+// body — on a tabbed note the whole-document number is misleading when you're
+// working in one tab (Tyler, 2026-09-02), so TabbedBody publishes the active
+// section instead and the chrome labels it "this tab".
+export type WordCountSnapshot = { itemId: string; count: number; perTab: boolean };
+let current: WordCountSnapshot | null = null;
 let timer: ReturnType<typeof setTimeout> | null = null;
 const listeners = new Set<() => void>();
 
-export function publishBodyMarkdown(itemId: string, markdown: string) {
+// Publish the text to count. The whole-body editor calls this with the full
+// markdown; TabbedBody calls it (after, in the same commit) with just the active
+// tab's markdown and `perTab: true`. Last publish wins, so the tab-scoped count
+// lands on top of the whole-body one.
+export function publishBodyMarkdown(
+  itemId: string,
+  markdown: string,
+  opts: { perTab?: boolean } = {}
+) {
   if (timer) clearTimeout(timer);
   timer = setTimeout(() => {
     timer = null;
-    current = { itemId, count: wordCountOf(markdown) };
+    current = { itemId, count: wordCountOf(markdown), perTab: Boolean(opts.perTab) };
     for (const l of listeners) l();
   }, RECOUNT_MS);
 }
@@ -50,9 +63,21 @@ export function peekWordCount(itemId: string): number | null {
   return current && current.itemId === itemId ? current.count : null;
 }
 
-// `initial` is the server-rendered count; it stands until this item's editor has
-// published something newer.
-export function useWordCount(itemId: string, initial: number): number {
+// Whether the published count for an item is tab-scoped (null = nothing
+// published for it). For the verify script.
+export function peekWordCountPerTab(itemId: string): boolean | null {
+  return current && current.itemId === itemId ? current.perTab : null;
+}
+
+// `initial` is the server-rendered count (and whether it was tab-scoped); it
+// stands until this item's editor has published something newer.
+export function useWordCount(
+  itemId: string,
+  initial: number,
+  initialPerTab = false
+): { count: number; perTab: boolean } {
   const live = useSyncExternalStore(subscribe, getSnapshot, () => null);
-  return live && live.itemId === itemId ? live.count : initial;
+  return live && live.itemId === itemId
+    ? { count: live.count, perTab: live.perTab }
+    : { count: initial, perTab: initialPerTab };
 }

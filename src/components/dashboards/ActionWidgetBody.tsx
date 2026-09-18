@@ -9,6 +9,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { openItem } from "@/lib/item-nav";
 import NavGlyph from "@/components/nav/NavGlyph";
 import type { ActionWidgetSettings } from "@/lib/dashboard-widgets";
 
@@ -72,7 +73,7 @@ export default function ActionWidgetBody({ settings }: { settings: ActionWidgetS
       }
       if (!res.ok) throw new Error("create failed");
       const { item } = (await res.json()) as { item: { id: string } };
-      router.push(`/items/${item.id}`);
+      openItem(router, item.id);
     } catch {
       setBusy(false);
     }

@@ -24,7 +24,6 @@ const {
   DEFAULT_DURATION_MINUTES,
 } = await import("../src/lib/scheduled-time");
 const { buildTaskCalendar } = await import("../src/lib/ics");
-const { makeRecurrence } = await import("../src/lib/recurrence");
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {

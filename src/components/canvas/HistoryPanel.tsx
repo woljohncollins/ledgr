@@ -71,9 +71,16 @@ function DiffView({ segments }: { segments: DiffSegment[] }) {
 export default function HistoryPanel({
   itemId,
   currentText,
+  bare = false,
 }: {
   itemId: string;
   currentText: string;
+  // Drop the centered reading column, for hosts that already provide one — the
+  // task canvas renders this inside its two-pane main column, where the inner
+  // `mx-auto max-w-3xl` would re-center it against the wrong width and push it
+  // visibly out of line with the body above (the misalignment Tyler flagged,
+  // 2026-09-11). Matches CanvasSection/ItemFilesSection's `bare`.
+  bare?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [revisions, setRevisions] = useState<RevMeta[] | null>(null);
@@ -159,9 +166,8 @@ export default function HistoryPanel({
     ? revisions?.find((r) => r.id === fromId)?.createdAt
     : null;
 
-  return (
-    <div className="canvas-section-wrap mx-auto w-full max-w-3xl px-2 sm:px-8 md:px-12">
-      <section className="canvas-section">
+  const panel = (
+    <section className={`canvas-section ${bare ? "canvas-section-bare" : ""}`}>
       <button
         type="button"
         onClick={toggle}
@@ -279,7 +285,13 @@ export default function HistoryPanel({
           )}
         </div>
       )}
-      </section>
+    </section>
+  );
+  return bare ? (
+    panel
+  ) : (
+    <div className="canvas-section-wrap mx-auto w-full max-w-3xl px-2 sm:px-8 md:px-12">
+      {panel}
     </div>
   );
 }

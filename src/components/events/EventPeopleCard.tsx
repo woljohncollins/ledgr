@@ -19,6 +19,7 @@ import { useRouter } from "next/navigation";
 import type { PrepGhost, PrepPerson } from "@/lib/meetings/prep";
 import type { EventGroup } from "@/lib/events/people";
 import { EVENT_GROUP_ROLE } from "@/lib/events/people";
+import { createMentionTarget, createRowText } from "@/lib/mention-create";
 
 // Rosters render inline up to this many unresolved chips (sized for the ~12
 // regular pastors, Brandon 2026-07-05); larger sets collapse behind "+N more".
@@ -47,15 +48,25 @@ function Avatar({ title, dim = false }: { title: string; dim?: boolean }) {
 type Hit = { id: string; title: string; type: string };
 
 // A shared typeahead popover for the "+ person" / "+ group" affordances.
+//
+// Create-on-miss goes through the shared creator (lib/mention-create.ts), like
+// the other five pickers in the app (Brandon, 2026-08-28): this one had its own
+// search and no create at all, so a person who wasn't in Ledgr yet couldn't be
+// added to a meeting from the meeting — you had to leave, make the person, come
+// back. The type is declared here, so there's nothing to ask: one create row,
+// the same eager typed create RelationField does.
 function AddPicker({
   label,
   typeKey,
+  typeLabel,
   placeholder,
   exclude,
   onPick,
 }: {
   label: string;
   typeKey: string;
+  // What the create row says on its right edge ("Person", "Group").
+  typeLabel: string;
   placeholder: string;
   exclude: Set<string>;
   onPick: (hit: Hit) => void;
@@ -63,6 +74,7 @@ function AddPicker({
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<Hit[]>([]);
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -78,7 +90,11 @@ function AddPicker({
         const res = await fetch(`/api/items?${params}`, { signal: ctrl.signal });
         if (!res.ok) return;
         const data = (await res.json()) as { items: Hit[] };
-        setHits(data.items.filter((h) => !exclude.has(h.id)));
+        // Keep the UNFILTERED results: the already-added ones are hidden at
+        // render, but they still have to count for the create-on-miss test —
+        // otherwise typing the name of someone already on the event would offer
+        // to create a second person by that name.
+        setHits(data.items);
       } catch {
         /* aborted or offline; next keystroke retries */
       }
@@ -88,6 +104,36 @@ function AddPicker({
       clearTimeout(t);
     };
   }, [q, open, typeKey, exclude]);
+
+  const trimmed = q.trim();
+  // Offer the create row for a name that matches nothing (case-blind), the same
+  // test every other create-on-miss surface uses.
+  const showCreate =
+    trimmed !== "" &&
+    !hits.some((h) => (h.title || "").trim().toLowerCase() === trimmed.toLowerCase());
+
+  const close = () => {
+    setQ("");
+    setHits([]);
+    setOpen(false);
+  };
+
+  // Create the named item as this picker's type, then hand it to onPick exactly
+  // as if it had been a hit — so the caller's attendance/relation write is
+  // unchanged. A failed create leaves the typed text alone to retry.
+  const createAndPick = async () => {
+    if (creating || !trimmed) return;
+    setCreating(true);
+    const made = await createMentionTarget(trimmed, {
+      key: typeKey,
+      label: typeLabel,
+      icon: null,
+    });
+    setCreating(false);
+    if (!made) return;
+    onPick({ id: made.id, title: made.title, type: made.type ?? typeKey });
+    close();
+  };
 
   return (
     <span className="relative">
@@ -104,20 +150,28 @@ function AddPicker({
             autoFocus
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => e.key === "Escape" && setOpen(false)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setOpen(false);
+              // Enter creates when nothing matched — the whole point of typing a
+              // name that isn't there yet.
+              if (e.key === "Enter" && showCreate) {
+                e.preventDefault();
+                void createAndPick();
+              }
+            }}
             placeholder={placeholder}
             className="w-full rounded border border-line bg-surface-0 px-2 py-1 text-sm text-ink outline-none"
           />
           <ul className="mt-1 max-h-40 overflow-auto">
-            {hits.map((h) => (
+            {hits
+              .filter((h) => !exclude.has(h.id))
+              .map((h) => (
               <li key={h.id}>
                 <button
                   type="button"
                   onClick={() => {
                     onPick(h);
-                    setQ("");
-                    setHits([]);
-                    setOpen(false);
+                    close();
                   }}
                   className="block w-full truncate rounded px-2 py-1 text-left text-sm text-ink-muted hover:bg-surface-2"
                 >
@@ -125,6 +179,20 @@ function AddPicker({
                 </button>
               </li>
             ))}
+            {showCreate && (
+              <li>
+                <button
+                  type="button"
+                  onClick={() => void createAndPick()}
+                  className="flex w-full items-center gap-1.5 rounded px-2 py-1 text-left text-sm hover:bg-surface-2"
+                >
+                  <span className="min-w-0 flex-1 truncate text-ink">
+                    {createRowText(trimmed, creating)}
+                  </span>
+                  <span className="shrink-0 text-xs text-ink-faint">{typeLabel}</span>
+                </button>
+              </li>
+            )}
           </ul>
         </div>
       )}
@@ -284,6 +352,7 @@ export default function EventPeopleCard({
         <AddPicker
           label="+ group"
           typeKey="group"
+          typeLabel="Group"
           placeholder="Search groups…"
           exclude={new Set(groups.map((g) => g.id))}
           onPick={(h) => void relate(h.id, EVENT_GROUP_ROLE)}
@@ -369,6 +438,7 @@ export default function EventPeopleCard({
         <AddPicker
           label="+ person"
           typeKey="person"
+          typeLabel="Person"
           placeholder="Search people…"
           exclude={
             new Set([

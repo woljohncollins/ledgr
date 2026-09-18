@@ -12,6 +12,9 @@ import { resolveMentions } from "@/lib/mentions";
 import { bodyMarkdown } from "@/lib/body";
 import { collectMentionIdsFromMarkdown } from "@/lib/editor/mention-markdown";
 import { resolveItemBodyTokens } from "@/lib/item-tokens-service";
+import { addShareTokenToAttachmentUrls } from "@/lib/attachment-url";
+import { getSettings } from "@/lib/settings";
+import { makeMarkdownBody } from "@/lib/body";
 import { captureError, createLogger } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
@@ -58,9 +61,36 @@ export async function GET(
   // comment is a private note to self, and a share is cached at the edge for up
   // to 60s, so a leak can't be taken back. If a "share with my comments" option
   // is ever wanted, it rides the token the way showIcons does above.
-  const html = renderPrintDocument(resolved.title, resolved.body, {
-    footerHtml: "Shared from Ledgr · read-only",
+  // Attachments are private (ADR-231): /files/<id> needs the owner's session,
+  // which an anonymous reader of this page does not have. Rewrite each address
+  // on the way out so it carries THIS link's token — the route then grants
+  // access only for attachments hanging off this very item. Nothing stored
+  // changes; revoking the link kills its images along with the page.
+  const shareBody = makeMarkdownBody(
+    addShareTokenToAttachmentUrls(bodyMarkdown(resolved.body), token)
+  );
+
+  // The footer names whose Ledgr this came from (Tyler, 2026-08-29) — the
+  // owner's Settings display name, escaped since footerHtml is raw markup;
+  // falls back to the plain wording when no name is set.
+  const ownerSettings = await getSettings(shared.ownerId);
+  const displayName = ownerSettings.displayName.trim();
+  const escaped = displayName
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const whose = escaped
+    ? `${escaped}${/s$/i.test(escaped) ? "'" : "'s"} Ledgr`
+    : "Ledgr";
+  const html = renderPrintDocument(resolved.title, shareBody, {
+    footerHtml: `Shared from ${whose} · read-only`,
     mentions,
+    // So an accent highlight in the body renders in the owner's color on a
+    // page that has no app context to resolve `var(--accent)` against.
+    accent: ownerSettings.highlightColor,
+    // The look baked into the link when it was minted, else the owner's current
+    // theme. The reader can switch it on the page itself.
+    theme: shared.options.theme ?? ownerSettings.theme,
   });
 
   return new NextResponse(html, {

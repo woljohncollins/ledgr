@@ -10,21 +10,20 @@ import ListPage from "@/components/lists/ListPage";
 import ViewRenderer from "@/components/views/ViewRenderer";
 import NewItemButton from "@/components/home/NewItemButton";
 import InlineAddTask from "@/components/tasks/InlineAddTask";
-import SwipeRow from "@/components/lists/SwipeRow";
 import TabStrip from "@/components/nav/TabStrip";
 import BulkActionBar from "@/components/selection/BulkActionBar";
-import SelectCheckbox from "@/components/selection/SelectCheckbox";
 import SelectionProvider from "@/components/selection/SelectionProvider";
 import SelectModeToggle from "@/components/selection/SelectModeToggle";
-import SubtaskCheckbox from "@/components/subtasks/SubtaskCheckbox";
-import SubtaskExpandableRow from "@/components/subtasks/SubtaskExpandableRow";
+import TaskList, { effTaskDate } from "@/components/tasks/TaskListRow";
+import { taskRowMeta } from "@/lib/task-row-meta";
 import { childRollups } from "@/lib/subtasks";
-import type { Progress } from "@/lib/subtasks";
+import { foldTodayTasks } from "@/lib/subtask-fold";
+import { staleProjects } from "@/lib/digest/stale";
 import { bulkConfigForType } from "@/lib/bulk-config";
 import { priorityStyle, prioritySortKey, type Priority } from "@/lib/priority";
 import { resolveOwner } from "@/lib/owner";
 import { appTodayYmd } from "@/lib/recurrence-service";
-import { resolveStatusSchema, type StatusDef } from "@/lib/status";
+import { resolveStatusSchema } from "@/lib/status";
 import { getAppTimezone, todayBounds } from "@/lib/today";
 import { getType } from "@/lib/types";
 import { queryViewItems, type ViewDefinition } from "@/lib/views";
@@ -34,11 +33,16 @@ import { overlayWindow } from "@/lib/calendar/overlay";
 export const dynamic = "force-dynamic";
 
 type ListedItem = Awaited<ReturnType<typeof queryViewItems>>[number];
-type Tab = "today" | "inbox" | "upcoming" | "projects" | "planner";
+type Tab = "today" | "all" | "upcoming" | "overdue" | "projects" | "planner";
 const TABS: { key: Tab; label: string }[] = [
   { key: "today", label: "Today" },
-  { key: "inbox", label: "Inbox" },
+  // "All" replaced the Inbox tab (Tyler, 2026-08-18): every active task in one
+  // list, dated or not. Untriaged capture still has its own home at /inbox.
+  { key: "all", label: "All" },
   { key: "upcoming", label: "Upcoming" },
+  // Overdue before Projects (Tyler, 2026-08-18): one place to sweep every
+  // past-due task and fix its date with the row's click-to-edit picker.
+  { key: "overdue", label: "Overdue" },
   { key: "projects", label: "Projects" },
   { key: "planner", label: "Planner" },
 ];
@@ -49,82 +53,9 @@ const weekdayFmt = new Intl.DateTimeFormat("en-US", { weekday: "long", timeZone:
 const shortDay = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: "UTC" });
 
 const dayKey = (d: Date) => d.toISOString().slice(0, 10);
-// The date that places a task: its effective plan date — scheduled (planned)
-// day if set, else the due deadline (ADR-109). Scheduled-primary, due-secondary,
-// and undated when neither is set.
-function effDate(t: ListedItem): Date | null {
-  return t.scheduledDate ?? t.dueDate ?? null;
-}
-
-const TASK_ROW_CLASS = "group flex items-center gap-2.5 rounded px-2 py-1 hover:bg-neutral-800/60";
-
-function TaskRow({ task, dueToday, statuses, rollup, today }: { task: ListedItem; dueToday: Date; statuses: StatusDef[]; rollup?: Progress; today: string }) {
-  const done = task.statusCategory === "done";
-  const sdef = statuses.find((s) => s.key === task.status);
-  const date = effDate(task);
-  const overdue = !done && date != null && date < dueToday;
-  const pri = task.urgency != null ? (task.urgency as Priority) : null;
-  const inner = (
-    <>
-      <SelectCheckbox id={task.id} />
-      <SubtaskCheckbox id={task.id} done={done} />
-      <Link
-        href={`/items/${task.id}`}
-        className={`min-w-0 flex-1 truncate text-sm ${task.title ? "text-neutral-200" : "text-neutral-500"} ${done ? "line-through opacity-60" : ""}`}
-      >
-        {task.title || "Untitled"}
-      </Link>
-      {pri != null && pri <= 5 && (
-        <span className={`shrink-0 rounded border px-1.5 text-xs ${priorityStyle(pri).text} ${priorityStyle(pri).border}`}>
-          P{pri}
-        </span>
-      )}
-      {sdef && sdef.category !== "not_started" && (
-        <span className="hidden shrink-0 items-center gap-1 rounded bg-neutral-800 px-1.5 text-xs text-neutral-400 sm:inline-flex">
-          {sdef.color && <span aria-hidden className="inline-block h-2 w-2 rounded-full" style={{ backgroundColor: sdef.color }} />}
-          {sdef.label}
-        </span>
-      )}
-      <span className={`shrink-0 text-xs ${overdue ? "text-red-400" : "text-neutral-600"}`}>
-        {date ? dayFmt.format(date) : ""}
-      </span>
-    </>
-  );
-  // Trash + Complete/Focus/Schedule live in the shared row menu (right-click /
-  // long-press), not an always-visible button; task rows also swipe (right =
-  // complete, left = schedule). ADR-142, mirroring /list/[type].
-  const menuOpts = {
-    id: task.id,
-    canComplete: true,
-    done,
-    today,
-    label: task.title || "Untitled",
-  };
-  // A task with task-children gets the expandable pill (which carries the menu);
-  // everything else stays a plain flat row with swipe + menu.
-  if (rollup && rollup.total > 0) {
-    return (
-      <SubtaskExpandableRow id={task.id} done={rollup.done} total={rollup.total} liClassName={TASK_ROW_CLASS} menuOptions={menuOpts}>
-        {inner}
-      </SubtaskExpandableRow>
-    );
-  }
-  return (
-    <SwipeRow className={TASK_ROW_CLASS} {...menuOpts}>
-      {inner}
-    </SwipeRow>
-  );
-}
-
-function TaskList({ tasks, dueToday, statuses, rollups, today }: { tasks: ListedItem[]; dueToday: Date; statuses: StatusDef[]; rollups?: Map<string, Progress>; today: string }) {
-  return (
-    <ul className="mt-1">
-      {tasks.map((t) => (
-        <TaskRow key={t.id} task={t} dueToday={dueToday} statuses={statuses} rollup={rollups?.get(t.id)} today={today} />
-      ))}
-    </ul>
-  );
-}
+// The shared task row + list moved to components/tasks/TaskListRow.tsx
+// (2026-08-17) so a record's full task list renders the same rows as these tabs.
+const effDate = effTaskDate;
 
 export default async function Tasks({
   searchParams,
@@ -137,9 +68,10 @@ export default async function Tasks({
   const tab: Tab = (TABS.find((t) => t.key === sp.tab)?.key ?? "today") as Tab;
   const weekOffset = Math.max(0, Number.parseInt(typeof sp.week === "string" ? sp.week : "0", 10) || 0);
 
-  const taskType = await getType("task");
+  // Parallel: two independent reads that used to run back-to-back (each
+  // router.refresh pays this page's full latency, so serial awaits are felt).
+  const [taskType, tz] = await Promise.all([getType("task"), getAppTimezone(owner.id)]);
   const statuses = resolveStatusSchema(taskType.statusSchema);
-  const tz = await getAppTimezone(owner.id);
   const { dueToday } = todayBounds(new Date(), tz);
   // App-timezone today (YYYY-MM-DD) for the row menu's Focus + Schedule quick
   // dates (ADR-142). Named `todayYmd` to avoid the "today" tab's local `today`
@@ -183,14 +115,22 @@ export default async function Tasks({
     // priority groups (Todoist-style); the rest — due exactly today — group by
     // priority so an overdue item shows once, in Overdue, not also under a
     // priority. Overdue keeps the query's plan-asc order (oldest first).
-    const overdue = onPlate.filter((t) => {
+    const overdueAll = onPlate.filter((t) => {
       const d = effDate(t);
       return d != null && d < dueToday;
     });
-    const dueNow = onPlate.filter((t) => {
+    const dueNowAll = onPlate.filter((t) => {
       const d = effDate(t);
       return d != null && d >= dueToday;
     });
+    // The subtask fold (ADR-205): a task whose parent is also on this page
+    // renders under the parent's pre-expanded tree instead of as its own row
+    // (overdue children hide only under an overdue parent — see subtask-fold).
+    const {
+      overdue,
+      dueToday: dueNow,
+      expandIds,
+    } = foldTodayTasks(overdueAll, dueNowAll);
     // group the rest by priority (1..6; null → 6/none)
     const groups = new Map<number, ListedItem[]>();
     for (const t of dueNow) {
@@ -202,18 +142,65 @@ export default async function Tasks({
       ...overdue.map((t) => t.id),
       ...ordered.flatMap(([, items]) => items.map((t) => t.id)),
     ];
-    const rollups = await childRollups(owner.id, selectableIds);
+    // Rollups + the per-row extras (excerpt, connections, project breadcrumb) —
+    // batched queries keyed on the ids already computed for selection, so the
+    // cost is a few extra round trips per page, never one per row (the no-N+1
+    // perf rule).
+    // Projects gone quiet (Tyler, 2026-08-17): active projects not opened or
+    // touched within their per-project window surface here as P1-styled
+    // check-in rows — virtual rows, not real tasks (no data to clean up;
+    // opening the project makes the row disappear, because the view beacon
+    // resets the clock). Per-project opt-out lives on the project itself.
+    const [rollups, meta, quiet] = await Promise.all([
+      childRollups(owner.id, selectableIds),
+      taskRowMeta(owner.id, selectableIds),
+      staleProjects(owner.id),
+    ]);
+    const quietSection =
+      quiet.length > 0 ? (
+        <div>
+          <h3 className={`px-2 text-xs font-semibold uppercase tracking-wide ${priorityStyle(1).text}`}>
+            Check in
+          </h3>
+          <ul className="mt-1">
+            {quiet.map((p) => (
+              <li key={p.id}>
+                <Link
+                  href={`/items/${p.id}`}
+                  className="group flex items-center gap-2.5 rounded px-2 py-1 hover:bg-neutral-800/60"
+                >
+                  <span className={`shrink-0 rounded border px-1.5 text-xs ${priorityStyle(1).text} ${priorityStyle(1).border}`}>
+                    P1
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-sm text-neutral-200">
+                    Check on {p.title}
+                  </span>
+                  <span className="shrink-0 text-xs text-neutral-600">
+                    quiet {p.daysQuiet}d
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null;
     body =
-      onPlate.length === 0 ? (
+      onPlate.length === 0 && !quietSection ? (
         <p className="mt-6 px-2 text-sm text-neutral-600">Nothing due today. 🎉</p>
+      ) : onPlate.length === 0 ? (
+        <div className="mt-4 space-y-4">
+          {quietSection}
+          <p className="px-2 text-sm text-neutral-600">Nothing due today. 🎉</p>
+        </div>
       ) : (
         <div className="mt-4 space-y-4">
+          {quietSection}
           {overdue.length > 0 && (
             <div>
               <h3 className="px-2 text-xs font-semibold uppercase tracking-wide text-red-400">
                 Overdue
               </h3>
-              <TaskList tasks={overdue} dueToday={dueToday} statuses={statuses} rollups={rollups} today={todayYmd} />
+              <TaskList tasks={overdue} dueToday={dueToday} statuses={statuses} rollups={rollups} today={todayYmd} meta={meta} expandIds={expandIds} />
             </div>
           )}
           {ordered.map(([k, items]) => {
@@ -223,21 +210,29 @@ export default async function Tasks({
                 <h3 className={`px-2 text-xs font-semibold uppercase tracking-wide ${s.text}`}>
                   {k === 6 ? "No priority" : `Priority ${k}`}
                 </h3>
-                <TaskList tasks={items} dueToday={dueToday} statuses={statuses} rollups={rollups} today={todayYmd} />
+                <TaskList tasks={items} dueToday={dueToday} statuses={statuses} rollups={rollups} today={todayYmd} meta={meta} expandIds={expandIds} />
               </div>
             );
           })}
         </div>
       );
-  } else if (tab === "inbox") {
-    const inbox = await queryViewItems(owner.id, { type: "task", inbox: true, statusCategory: "active" }, { field: "createdAt", dir: "desc" });
-    selectableIds = inbox.map((t) => t.id);
-    const rollups = await childRollups(owner.id, selectableIds);
+  } else if (tab === "all") {
+    const allRaw = await queryViewItems(owner.id, { type: "task", statusCategory: "active" }, { field: "plan", dir: "asc" });
+    // The fold, All-tab flavor (ADR-205 addendum 2): a subtask renders under
+    // its parent's pill, never as a peer row — its active parent is on this
+    // list by definition. COLLAPSED by default here (expandIds discarded): All
+    // is the inventory, and nothing on it is dated-today urgent.
+    const { dueToday: all } = foldTodayTasks([], allRaw);
+    selectableIds = all.map((t) => t.id);
+    const [rollups, meta] = await Promise.all([
+      childRollups(owner.id, selectableIds),
+      taskRowMeta(owner.id, selectableIds),
+    ]);
     body =
-      inbox.length === 0 ? (
-        <p className="mt-6 px-2 text-sm text-neutral-600">Inbox zero. Quick-capture lands here for triage.</p>
+      all.length === 0 ? (
+        <p className="mt-6 px-2 text-sm text-neutral-600">No open tasks.</p>
       ) : (
-        <TaskList tasks={inbox} dueToday={dueToday} statuses={statuses} rollups={rollups} today={todayYmd} />
+        <TaskList tasks={all} dueToday={dueToday} statuses={statuses} rollups={rollups} today={todayYmd} meta={meta} />
       );
   } else if (tab === "upcoming") {
     const active = await queryViewItems(owner.id, { type: "task", statusCategory: "active" }, { field: "plan", dir: "asc" });
@@ -251,9 +246,23 @@ export default async function Tasks({
       const k = dayKey(d);
       (byDay.get(k) ?? byDay.set(k, []).get(k)!).push(t);
     }
+    // The fold, per day (ADR-205 addendum 2 — the duplication Tyler screenshotted:
+    // a subtask flat in the day AND inside its parent's tree). Within one day a
+    // subtask folds under its same-day parent, pre-expanded; a subtask whose
+    // parent sits on another day (or is undated) keeps its own flat row under
+    // ITS day — dated work always appears under its date.
+    const expandIds = new Set<string>();
+    for (const [k, items] of byDay) {
+      const folded = foldTodayTasks([], items);
+      byDay.set(k, folded.dueToday);
+      for (const id of folded.expandIds) expandIds.add(id);
+    }
     const label = weekOffset === 0 ? "Current" : `+${weekOffset} week${weekOffset === 1 ? "" : "s"}`;
     selectableIds = days.flatMap((d) => (byDay.get(dayKey(d)) ?? []).map((t) => t.id));
-    const rollups = await childRollups(owner.id, selectableIds);
+    const [rollups, meta] = await Promise.all([
+      childRollups(owner.id, selectableIds),
+      taskRowMeta(owner.id, selectableIds),
+    ]);
     body = (
       <div className="mt-4">
         {/* week nav + day-jump chips */}
@@ -287,7 +296,7 @@ export default async function Tasks({
                 <h3 className="border-b border-neutral-800/60 px-2 pb-1 text-sm font-semibold text-neutral-200">
                   {dayFmt.format(d)} · {isToday ? "Today" : weekdayFmt.format(d)}
                 </h3>
-                {items.length > 0 && <TaskList tasks={items} dueToday={dueToday} statuses={statuses} rollups={rollups} today={todayYmd} />}
+                {items.length > 0 && <TaskList tasks={items} dueToday={dueToday} statuses={statuses} rollups={rollups} today={todayYmd} meta={meta} expandIds={expandIds} />}
                 <InlineAddTask dueYmd={dayKey(d)} />
               </div>
             );
@@ -295,6 +304,37 @@ export default async function Tasks({
         </div>
       </div>
     );
+  } else if (tab === "overdue") {
+    // Every active task whose effective date is behind today, oldest first —
+    // the same set Today's Overdue group shows, as its own sweepable surface:
+    // each row's date is click-to-editable, so cleaning up a backlog is one
+    // picker per row without leaving the tab.
+    const active = await queryViewItems(owner.id, { type: "task", statusCategory: "active" }, { field: "plan", dir: "asc" });
+    const lateAll = active.filter((t) => {
+      const d = effDate(t);
+      return d != null && d < dueToday;
+    });
+    // The fold (ADR-205 addendum 2): an overdue subtask folds under its
+    // overdue parent, pre-expanded — the tree rows' dates are click-to-edit
+    // too, so the sweep still reaches every row. The header count stays
+    // PRE-fold: it names how many tasks are overdue, not how many rows render.
+    const { overdue: late, expandIds } = foldTodayTasks(lateAll, []);
+    selectableIds = late.map((t) => t.id);
+    const [rollups, meta] = await Promise.all([
+      childRollups(owner.id, selectableIds),
+      taskRowMeta(owner.id, selectableIds),
+    ]);
+    body =
+      lateAll.length === 0 ? (
+        <p className="mt-6 px-2 text-sm text-neutral-600">Nothing overdue. 🎉</p>
+      ) : (
+        <div className="mt-4">
+          <p className="px-2 text-xs text-neutral-500">
+            {lateAll.length} overdue — click a row&apos;s date to reschedule it in place.
+          </p>
+          <TaskList tasks={late} dueToday={dueToday} statuses={statuses} rollups={rollups} today={todayYmd} meta={meta} expandIds={expandIds} />
+        </div>
+      );
   } else if (tab === "planner") {
     // Drag-to-schedule calendar over all active tasks (ADR-131). Defaults to the
     // multi-day time-grid (it self-navigates by day, so no ?month param is needed
@@ -331,7 +371,12 @@ export default async function Tasks({
       }))
     );
     selectableIds = cards.flatMap(({ tasks }) => tasks.map((t) => t.id));
-    const rollups = await childRollups(owner.id, selectableIds);
+    // Same batched reads as the other tabs — one set of queries for every task
+    // across every project card, not one per card.
+    const [rollups, meta] = await Promise.all([
+      childRollups(owner.id, selectableIds),
+      taskRowMeta(owner.id, selectableIds),
+    ]);
     body =
       cards.length === 0 ? (
         <p className="mt-6 px-2 text-sm text-neutral-600">No projects yet. Create one to gather its tasks, notes, and events.</p>
@@ -353,7 +398,7 @@ export default async function Tasks({
                   )}
                 </div>
                 {tasks.length > 0 ? (
-                  <TaskList tasks={tasks} dueToday={dueToday} statuses={statuses} rollups={rollups} today={todayYmd} />
+                  <TaskList tasks={tasks} dueToday={dueToday} statuses={statuses} rollups={rollups} today={todayYmd} meta={meta} showProject={false} />
                 ) : (
                   <p className="mt-2 px-2 text-xs text-neutral-600">No open tasks.</p>
                 )}
@@ -380,7 +425,7 @@ export default async function Tasks({
             <InlineAddTask dueYmd={dayKey(dueToday)} />
           </div>
         )}
-        {tab === "inbox" && (
+        {tab === "all" && (
           <div className="mt-3">
             <InlineAddTask />
           </div>

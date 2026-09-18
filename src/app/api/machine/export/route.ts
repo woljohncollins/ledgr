@@ -1,11 +1,27 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
-import { verifyMachineToken } from "@/lib/auth/machine";
+import { verifyMachineRequest } from "@/lib/auth/credentials";
 import { getDb } from "@/db";
 import { users } from "@/db/schema";
 import { runExport } from "@/lib/export/engine";
 import { getGraphConfig, OneDriveExportTarget } from "@/lib/export/onedrive";
 import { captureError, createLogger, errorMessage } from "@/lib/log";
+import { standDownIfNotOwner } from "@/lib/job-owner-guard";
+import { stampJobRun } from "@/lib/job-owners-store";
+
+/**
+ * The per-run caps, lifted when this install is not a serverless function.
+ *
+ * `undefined` on a cloud deploy leaves the engine's own defaults (30 items, a
+ * 45s budget) exactly as they are — those exist because the lambda dies at 60s.
+ * A supervised local peer has no such ceiling, so it takes the batch limit the
+ * engine allows and a 20-minute budget, which is what lets a backlog actually
+ * clear instead of shrinking by 30 a night.
+ */
+function localExportBudget(): { batch: number; budgetMs: number } | undefined {
+  if (process.env.VERCEL_ENV || !process.env.LEDGR_SUPERVISOR_DIR) return undefined;
+  return { batch: 500, budgetMs: 20 * 60_000 };
+}
 
 // Nightly OneDrive export (vercel.json cron; PRD §5.4). Same door as the
 // purge: Vercel sends GET with CRON_SECRET, a raw cron-scoped machine token.
@@ -25,7 +41,7 @@ async function resolveExportOwner(upn: string): Promise<string | null> {
 }
 
 export async function GET(request: Request) {
-  const identity = verifyMachineToken(
+  const identity = await verifyMachineRequest(
     request.headers.get("authorization"),
     "cron"
   );
@@ -54,14 +70,29 @@ export async function GET(request: Request) {
     if (!ownerId) {
       throw new Error(`no users row matches ONEDRIVE_EXPORT_UPN ${cfg.upn}`);
     }
+    // Exactly one install may run this: two writers on one OneDrive folder, and
+    // `items.exported_at` is itself synced, so a double export is corrupting
+    // rather than merely wasteful. An unclaimed job runs everywhere, as before.
+    const standDown = await standDownIfNotOwner("export", ownerId);
+    if (standDown) {
+      log.info("export skipped: this install does not own the job");
+      return standDown;
+    }
     const itemErrors: { itemId: string; message: string }[] = [];
     const attachmentErrors: { itemId: string; storageKey: string; status: number }[] = [];
     const result = await runExport(ownerId, new OneDriveExportTarget(cfg), {
+      // THE REASON MOVING THIS JOB IS WORTH ANYTHING. The caps exist because a
+      // Vercel lambda dies at 60s: 30 items and a 45s budget per run. Measured
+      // 2026-08-25, that no longer keeps up with the edit rate, so `remaining`
+      // climbs and the queue never drains. A local peer has no such ceiling, so
+      // when the job runs on one it takes the whole queue in one pass.
+      ...(localExportBudget() ?? {}),
       onError: (itemId, err) =>
         itemErrors.push({ itemId, message: errorMessage(err) }),
       onAttachmentError: (itemId, failures) =>
         attachmentErrors.push(...failures.map((f) => ({ itemId, ...f }))),
     });
+    await stampJobRun(ownerId, "export");
     log.info("export run finished", { ...result });
     if (itemErrors.length > 0) {
       await captureError("export", null, {

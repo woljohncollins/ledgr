@@ -35,7 +35,10 @@ export type Composition = {
 
 export const DEFAULT_DIGEST: DigestBehavior = {
   enabled: true,
-  stalenessDays: 7,
+  // 14, not 7 (Tyler, 2026-08-17): "haven't looked at it in a while" is a
+  // two-week feeling. Opening the project resets the clock (the view beacon
+  // writes checkin_reviewed), so an actively-read project never surfaces.
+  stalenessDays: 14,
   upcomingDays: 7,
 };
 
@@ -57,6 +60,12 @@ function seat(defId: string, options?: Record<string, unknown>): RecordWidget {
 
 const PROJECT_DEFAULT_WIDGETS: RecordWidget[] = [
   // Header (no card chrome, no titles) — see WidgetCanvas HEADER_WIDGETS.
+  // Overview is back in the default (it was dropped in the 2026-07-01 redesign,
+  // which is what made project descriptions vanish). It costs nothing when
+  // empty: HeaderOverview collapses to a small lines glyph until something is
+  // written, so a brand-new project shows a place to describe itself rather than
+  // hiding the affordance entirely.
+  seat("overview"),
   seat("status"),
   seat("people"),
   seat("progress"),
@@ -216,12 +225,29 @@ export function isWidgetEnabled(comp: Composition, defId: string): boolean {
 // The per-card preview cap for a collection/related widget (Tyler, 2026-07-01):
 // how many rows the card shows before offering a "Showing N of M →" link into
 // the full collection page. Stored per instance (the card's hover gear writes
-// options.limit); default 5, clamped [1, 50]. Pure + client-safe so the fan-out,
-// the canvas, and the gear all read one rule.
+// options.limit); default 5, clamped [1, 50] — or the literal "all" (Tyler,
+// 2026-08-17), which reads back as Infinity so slice()/comparisons need no
+// special case (the fan-out widens its fetch window, still bounded). Pure +
+// client-safe so the fan-out, the canvas, and the gear all read one rule.
 export const WIDGET_LIMIT_DEFAULT = 5;
 export const WIDGET_LIMIT_MAX = 50;
+export const WIDGET_LIMIT_ALL = "all";
 export function widgetLimit(instance: RecordWidget): number {
+  if (instance.options?.limit === WIDGET_LIMIT_ALL) return Number.POSITIVE_INFINITY;
   const n = Number(instance.options?.limit);
   if (!Number.isFinite(n)) return WIDGET_LIMIT_DEFAULT;
   return Math.min(Math.max(Math.round(n), 1), WIDGET_LIMIT_MAX);
+}
+
+// The per-card display title override (Tyler, 2026-08-19, rides ADR-204): the
+// card gear's Rename writes options.title, so a tool can be named per record
+// ("Docs" → "Sermon research" on one project, untouched elsewhere). Null = no
+// override; callers fall back to the catalog default. Trimmed and capped here
+// (not just in the input) so a stored stray value can't blow up the header.
+export const WIDGET_TITLE_MAX = 60;
+export function widgetTitle(instance: RecordWidget): string | null {
+  const raw = instance.options?.title;
+  if (typeof raw !== "string") return null;
+  const t = raw.trim().slice(0, WIDGET_TITLE_MAX);
+  return t.length > 0 ? t : null;
 }

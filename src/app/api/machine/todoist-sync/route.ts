@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
-import { verifyMachineToken } from "@/lib/auth/machine";
+import { verifyMachineRequest } from "@/lib/auth/credentials";
+import { standDownIfNotOwner } from "@/lib/job-owner-guard";
+import { stampJobRun } from "@/lib/job-owners-store";
 import { isTodoistAdapterActive } from "@/lib/tasks/provider";
 import { getTodoistClient } from "@/lib/todoist/client";
 import { resolveTodoistOwner } from "@/lib/todoist/owner";
@@ -14,7 +16,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 export async function GET(request: Request) {
-  const identity = verifyMachineToken(request.headers.get("authorization"), "cron");
+  const identity = await verifyMachineRequest(request.headers.get("authorization"), "cron");
   if (!identity) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
@@ -38,6 +40,8 @@ export async function GET(request: Request) {
   try {
     const ownerId = await resolveTodoistOwner();
     if (!ownerId) throw new Error("no users row resolves the Todoist owner (set TODOIST_OWNER_UPN)");
+    const standDown = await standDownIfNotOwner("todoist-sync", ownerId);
+    if (standDown) return standDown;
     const taskErrors: { itemId: string; message: string }[] = [];
     const result = await runTodoistSync(ownerId, client, {
       onError: (itemId, err) => taskErrors.push({ itemId, message: errorMessage(err) }),
@@ -50,6 +54,7 @@ export async function GET(request: Request) {
         detail: { taskErrors },
       });
     }
+    await stampJobRun(ownerId, "todoist-sync");
     return NextResponse.json({ ok: true, correlationId: log.correlationId, ...result });
   } catch (err) {
     await captureError("todoist-sync", err, { correlationId: log.correlationId });

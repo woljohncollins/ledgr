@@ -9,23 +9,43 @@
 "use client";
 
 import { useLayoutEffect, useRef, useState } from "react";
+import { contactInputType, contactLink } from "@/lib/contact-links";
 import { beginSave, endSave } from "@/lib/save-status";
 import type { PropertyDef } from "@/lib/types";
+import { propInstant } from "@/lib/placement";
+import ImageBox from "./ImageBox";
+import { imageUrl } from "@/lib/person-image";
+
+// datetime-local speaks the BROWSER's zone, which for a single-user app is the
+// owner's zone in practice. ponytail: if a device ever edits from another zone,
+// route these through users.settings.timezone (zone.ts zonedInstant) instead.
+const pad2 = (n: number) => String(n).padStart(2, "0");
+function toLocalInput(stored: string): string {
+  const inst = propInstant(stored);
+  if (inst) {
+    return `${inst.getFullYear()}-${pad2(inst.getMonth() + 1)}-${pad2(inst.getDate())}T${pad2(inst.getHours())}:${pad2(inst.getMinutes())}`;
+  }
+  // A day-only value in a timed field seeds the day; the clock starts at 00:00.
+  return stored.length >= 10 ? `${stored.slice(0, 10)}T00:00` : "";
+}
+function fromLocalInput(local: string): string | null {
+  if (!local) return null;
+  const d = new Date(local);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
 import InlineLabel from "./InlineLabel";
 
 // max-w-full so a fixed-width control (w-56, w-32) can't push past a narrow
 // container — the task rail scrolls on overflow-y, which makes overflow-x `auto`
 // too, so any few px of horizontal spill shows up as a scrollbar + shifted rail.
 const inputClass =
-  "max-w-full rounded border border-neutral-800 bg-neutral-900 px-1.5 py-0.5 text-sm text-neutral-200 outline-none focus:border-neutral-600 [color-scheme:dark]";
-
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  "max-w-full rounded border border-neutral-800 bg-neutral-900 px-1.5 py-0.5 text-sm text-neutral-200 outline-none focus:border-neutral-600";
 
 // Box-like kinds whose empty control reads as visual noise (the row of blank
 // inputs on a sparse Person). When empty they collapse into a "+ label" add-chip
 // cluster. The others always render as rows: checkbox IS its control, select
 // shows a compact "—", and multi_select must show its options to be usable.
-const RECEDE_KINDS = new Set(["text", "url", "number", "date"]);
+const RECEDE_KINDS = new Set(["text", "url", "phone", "email", "number", "date"]);
 
 // A value worth showing as a filled row (and offering an explicit clear for).
 // Checkbox has no "empty" state — the toggle is the control — so it's excluded.
@@ -39,47 +59,21 @@ function isFilled(v: unknown, kind: string): boolean {
 }
 
 // A clickable target derived from a filled scalar value, so a Person's email /
-// phone / website property isn't a dead text box. A `url` field links out; a
-// `text` field keyed or shaped like an email opens a mailto, one keyed like a
-// phone opens a tel. Returns null when nothing sensible applies (most fields),
-// so only the fields that earn an affordance get one. No schema change: this is
-// a display heuristic over the existing kinds, not a new property kind.
-function openTarget(
-  prop: PropertyDef,
-  value: unknown
-): { href: string; title: string; external: boolean } | null {
-  if (typeof value !== "string") return null;
-  const v = value.trim();
-  if (!v) return null;
-  if (prop.kind === "url") {
-    const href = /^[a-z][a-z0-9+.-]*:/i.test(v) ? v : `https://${v}`;
-    return { href, title: "Open link", external: true };
-  }
-  if (prop.kind === "text") {
-    const key = prop.key.toLowerCase();
-    if ((/e-?mail/.test(key) || EMAIL_RE.test(v)) && EMAIL_RE.test(v)) {
-      return { href: `mailto:${v}`, title: "Send email", external: false };
-    }
-    if (/phone|mobile|\btel\b|cell/.test(key) && /\d/.test(v)) {
-      return { href: `tel:${v.replace(/[^\d+]/g, "")}`, title: "Call", external: false };
-    }
-  }
-  return null;
+// phone / website property isn't a dead text box. The `phone`/`email`/`url` kinds
+// declare the intent outright (ADR-192); a legacy `text` field keyed or shaped
+// like one still gets the same affordance, so imported data keeps working.
+// Shared with the list's table layout — lib/contact-links.ts owns the rules.
+function openTarget(prop: PropertyDef, value: unknown) {
+  return contactLink(prop.kind, prop.key, value);
 }
 
 type Values = Record<string, unknown>;
 
-// A `text` field keyed like an email or phone renders as a single-line typed
-// input (right on-screen keyboard on mobile, format hint) instead of the default
-// wrapping textarea. Returns null for ordinary text, which keeps the textarea.
-function textInputType(
-  prop: PropertyDef
-): { type: "email" | "tel"; inputMode: "email" | "tel" } | null {
-  if (prop.kind !== "text") return null;
-  const key = prop.key.toLowerCase();
-  if (/e-?mail/.test(key)) return { type: "email", inputMode: "email" };
-  if (/phone|mobile|\btel\b|cell/.test(key)) return { type: "tel", inputMode: "tel" };
-  return null;
+// A `phone`/`email` field, or a legacy `text` field keyed like one, renders as a
+// single-line typed input (right on-screen keyboard on mobile, format hint)
+// instead of the default wrapping textarea. Null keeps the textarea.
+function textInputType(prop: PropertyDef) {
+  return contactInputType(prop.kind, prop.key);
 }
 
 // An uncontrolled textarea whose height tracks its content, for the wrapping
@@ -106,6 +100,7 @@ export default function CustomProperties({
   initial,
   hideHeading = false,
   bare = false,
+  wide = false,
   locked = false,
 }: {
   itemId: string;
@@ -118,6 +113,10 @@ export default function CustomProperties({
   hideHeading?: boolean;
   // Drop the wide centered-column padding for a narrow rail (task canvas).
   bare?: boolean;
+  // Lay the filled rows out across the available width instead of one narrow
+  // column (Tyler, 2026-09-14). For a wide surface like the project canvas,
+  // where a single stacked column leaves most of the row empty.
+  wide?: boolean;
   // When true (the item lock toggle): every field (and its clear button) is
   // disabled and can't be clicked into, via a disabled <fieldset> wrapper.
   locked?: boolean;
@@ -190,6 +189,12 @@ export default function CustomProperties({
   function control(prop: PropertyDef, autoFocus = false) {
     const v = values[prop.key];
     switch (prop.kind) {
+      // phone/email share this branch (ADR-192): textInputType always returns a
+      // typed input for them, so they take the single-line path below and need no
+      // control of their own. No placeholder on purpose — a sample number would
+      // imply a required format, and any format is accepted.
+      case "phone":
+      case "email":
       case "text": {
         const typed = textInputType(prop);
         // Email/phone-keyed text is a single-line typed input; everything else is
@@ -249,6 +254,10 @@ export default function CustomProperties({
             }}
           />
         );
+      // The picture box (ADR-255) carries its own upload/paste/remove UI, so
+      // it needs no defaultValue/onBlur wiring like the scalar controls above.
+      case "image":
+        return <ImageBox itemId={itemId} propKey={prop.key} initial={imageUrl(v)} />;
       case "number":
         return (
           <input
@@ -271,17 +280,44 @@ export default function CustomProperties({
             }}
           />
         );
-      case "date":
+      case "date": {
+        // A withTime field (ADR-254) edits a local wall-clock and stores an
+        // instant; a withEnd field shows a second input for its `__end` sibling.
+        const endKey = `${prop.key}__end`;
+        const input = (key: string, focus: boolean) => {
+          const raw = values[key];
+          const str = typeof raw === "string" ? raw : "";
+          return prop.withTime ? (
+            <input
+              key={key}
+              type="datetime-local"
+              autoFocus={focus}
+              className={inputClass}
+              value={toLocalInput(str)}
+              onChange={(e) => void save({ [key]: fromLocalInput(e.target.value) })}
+              onBlur={(e) => key === prop.key && recedeIfEmpty(prop.key, e.target.value)}
+            />
+          ) : (
+            <input
+              key={key}
+              type="date"
+              autoFocus={focus}
+              className={inputClass}
+              value={str.slice(0, 10)}
+              onChange={(e) => void save({ [key]: e.target.value || null })}
+              onBlur={(e) => key === prop.key && recedeIfEmpty(prop.key, e.target.value)}
+            />
+          );
+        };
+        if (!prop.withEnd) return input(prop.key, autoFocus);
         return (
-          <input
-            type="date"
-            autoFocus={autoFocus}
-            className={inputClass}
-            value={typeof v === "string" ? v.slice(0, 10) : ""}
-            onChange={(e) => void save({ [prop.key]: e.target.value || null })}
-            onBlur={(e) => recedeIfEmpty(prop.key, e.target.value)}
-          />
+          <span className="inline-flex flex-wrap items-center gap-1.5">
+            {input(prop.key, autoFocus)}
+            <span className="text-xs text-ink-subtle">to</span>
+            {input(endKey, false)}
+          </span>
         );
+      }
       case "checkbox":
         return (
           <input
@@ -337,12 +373,24 @@ export default function CustomProperties({
   function renderRow(prop: PropertyDef, filled: boolean, isEditing: boolean) {
     const isSaving = saving.has(prop.key);
     return (
-      <div key={prop.key} className="group flex items-center gap-3 text-sm">
-        <dt className="w-32 shrink-0 text-neutral-500">
+      // In the narrow rail (bare) the label stacks ABOVE its value (Tyler,
+      // 2026-08-14): a fixed 128px label column ate most of a 280px rail and
+      // squeezed every value into a truncated sliver. The wide canvas keeps the
+      // side-by-side column, where it lines up and there's room for both.
+      <div
+        key={prop.key}
+        className={`group text-sm ${bare ? "flex flex-col gap-0.5" : "flex items-center gap-3"}`}
+      >
+        <dt className={bare ? "text-xs font-medium text-ink-subtle" : "w-32 shrink-0 text-neutral-500"}>
           <InlineLabel typeKey={typeKey} propertyKey={prop.key} label={prop.label} />
         </dt>
         <dd className="flex min-w-0 items-center gap-1">
-          <span className={isSaving ? "opacity-50 transition-opacity" : undefined}>
+          {/* min-w-0: the controls are `w-56 max-w-full`, and max-w-full only
+              caps them if THIS wrapper can shrink below its content. Without it a
+              narrow layout card (4 of 12 columns, `overflow-auto`) is spilled by
+              the 128px label + 224px control, and Windows paints a horizontal
+              scrollbar under every field. */}
+          <span className={`min-w-0 ${isSaving ? "opacity-50 transition-opacity" : ""}`}>
             {control(prop, isEditing && !filled)}
           </span>
           {filled && (() => {
@@ -373,7 +421,10 @@ export default function CustomProperties({
               </a>
             );
           })()}
-          {filled && (
+          {/* Image already has its own Remove inside the box's popup, so the
+              row-level clear here would just duplicate it (skipped for
+              "image"; ADR-255). */}
+          {filled && prop.kind !== "image" && (
             <button
               type="button"
               onClick={() => {
@@ -422,7 +473,13 @@ export default function CustomProperties({
       <fieldset disabled={locked} className="contents">
         <div className={`flex flex-col gap-2 ${locked ? "opacity-60" : ""}`}>
           {rowProps.length > 0 && (
-            <dl className="flex flex-col gap-2">
+            <dl
+              className={
+                wide
+                  ? "grid grid-cols-1 gap-x-8 gap-y-2 sm:grid-cols-2 xl:grid-cols-3"
+                  : "flex flex-col gap-2"
+              }
+            >
               {rowProps.map((prop) =>
                 renderRow(prop, isFilled(values[prop.key], prop.kind), editing.has(prop.key))
               )}

@@ -5,17 +5,20 @@
 // MCP writes validate exactly like /api/items writes.
 import { asUuid, parseItemPayload } from "@/lib/api";
 import { BODY_WINDOW_CHARS, bodyMarkdown, isLargeBody, makeMarkdownBody, windowBody } from "@/lib/body";
+import { resolveSurfaceTarget, resolveSurfaces } from "@/lib/item-surfaces";
 import {
   ensureAnchorOnLine,
   findLineByText,
   lineWithBlockId,
   stripAnchorFromLine,
 } from "@/lib/editor/block-anchor";
-import { ITEM_STATUSES, ItemError, URGENCIES, getItem } from "@/lib/items";
+import { ItemError, URGENCIES, getItem, getItemType } from "@/lib/items";
 import { createItem, moveItemType, updateItem } from "@/lib/item-mutations";
+import { MEMORY_TYPE, memoryAge, memoryFacets, memoryMarker, supersededByFor } from "@/lib/memory";
 import { resolveItemBodyTokens } from "@/lib/item-tokens-service";
 import { listRelatedItems, relateItems } from "@/lib/relations";
 import { searchItems } from "@/lib/search";
+import { listTypes } from "@/lib/types";
 import {
   DATE_PROPERTIES,
   DUE_WINDOWS,
@@ -29,6 +32,7 @@ import {
 } from "@/lib/views";
 import { buildWriteRaw, optEnum, optInt, optString, optUuidArray, reqString } from "./args";
 import { rowView } from "./serializers";
+import { recurrenceView } from "./tasks";
 import type { McpTool } from "./wire";
 
 export const itemTools: McpTool[] = [
@@ -40,7 +44,12 @@ export const itemTools: McpTool[] = [
       "to find an item or a person by words — e.g. find the 'Roger' person, " +
       "or notes mentioning a topic. Returns matching items with a " +
       "highlighted snippet. To then list everything related to a person, pass " +
-      "its id as relatedTo to list_items.",
+      "its id as relatedTo to list_items. For AI-memory recall, pass " +
+      "type: \"memory\": when you meet an unfamiliar person, project, or system, " +
+      "search for it by name before assuming you know nothing about it. Without " +
+      "the type filter, memories are buried under notes, transcripts, and " +
+      "commentaries. Memory hits render their age, so you can tell a current " +
+      "claim from one that was true a year ago.",
     inputSchema: {
       type: "object",
       properties: {
@@ -53,13 +62,36 @@ export const itemTools: McpTool[] = [
     },
     annotations: { readOnlyHint: true, openWorldHint: false },
     handler: async (ownerId, args) => {
-      const rows = await searchItems(ownerId, reqString(args, "query"), {
+      const found = await searchItems(ownerId, reqString(args, "query"), {
         type: optString(args, "type"),
         limit: optInt(args, "limit"),
       });
+      // A retired (archived) memory stays in the store for the record but is
+      // no longer a claim to recall, so it drops out of memory search (ADR-259).
+      // Other types keep their archived rows: "find that archived note" is real.
+      const rows = found.filter((r) => !(r.type === MEMORY_TYPE && r.statusCategory === "archived"));
+      // Memory hits carry their age (ADR-230) plus the same STALE / SUPERSEDED
+      // marker the stump index renders (ADR-259): Tier 2 memories are reached
+      // by search, so the hedge has to appear here or it never appears.
+      const memoryIds = rows.filter((r) => r.type === MEMORY_TYPE).map((r) => r.id);
+      const superseded = await supersededByFor(ownerId, memoryIds);
       return {
         count: rows.length,
-        items: rows.map((r) => ({ ...rowView(r), snippet: r.snippet })),
+        items: rows.map((r) => ({
+          ...rowView(r),
+          ...(r.type === MEMORY_TYPE
+            ? {
+                age:
+                  memoryAge(r.updatedAt) +
+                  memoryMarker(
+                    memoryFacets(r.properties).horizon,
+                    r.updatedAt,
+                    superseded.get(r.id) ?? null
+                  ),
+              }
+            : {}),
+          snippet: r.snippet,
+        })),
       };
     },
   },
@@ -77,7 +109,7 @@ export const itemTools: McpTool[] = [
       type: "object",
       properties: {
         type: { type: "string", description: "Type key (e.g. task, event, note, link, person, or a custom type)." },
-        status: { type: "string", enum: [...ITEM_STATUSES], description: "Item status filter." },
+        status: { type: "string", description: "Item status filter — a status KEY for the type. The inherited default keys are open | done | archived; a type with named stages has its own (see list_types), e.g. status='active' for goals. Filtering by a status the type doesn't have simply matches nothing." },
         relatedTo: { type: "string", description: "Only items with a confirmed relation to this item id (either direction)." },
         due: { type: "string", enum: [...DUE_WINDOWS], description: "Date window: overdue | today | week | none (no date)." },
         withinDays: { type: "integer", description: "Items dated today through N days out (1–366). Wins over `due`.", minimum: 1, maximum: 366 },
@@ -93,8 +125,11 @@ export const itemTools: McpTool[] = [
       const filter: ViewFilter = {};
       const type = optString(args, "type");
       if (type) filter.type = type;
-      const status = optEnum(args, "status", ITEM_STATUSES);
-      if (status) filter.status = status;
+      // Not enum-gated against ITEM_STATUSES (ADR-243): that list is only the
+      // INHERITED default set, so pinning it here made every custom stage
+      // ("active", "waiting") unfilterable.
+      const status = optString(args, "status");
+      if (status) filter.status = status.toLowerCase();
       const relatedTo = args.relatedTo != null ? asUuid(args.relatedTo, "relatedTo") : undefined;
       if (relatedTo) filter.relatedTo = relatedTo;
       const dateField = optEnum<DateProperty>(args, "dateField", DATE_PROPERTIES);
@@ -127,7 +162,15 @@ export const itemTools: McpTool[] = [
       "ebook) is PAGED so it can't flood the context: the read returns the first " +
       `~${BODY_WINDOW_CHARS} characters with a truncation marker, plus a bodyInfo ` +
       "object {totalChars, offset, returnedChars, truncated, nextOffset}. To read " +
-      "more, call get_item again with bodyOffset set to the previous nextOffset.",
+      "more, call get_item again with bodyOffset set to the previous nextOffset. " +
+      "A BESPOKE type (paper, song, or a type carrying one of their bespoke tools) " +
+      "also returns `surfaces`: the named places its content lives, each with what " +
+      "belongs there and what is currently stored. A paper returns Notes, Shape, " +
+      "Quote Bank, Outline and Draft; a song returns Notes and Chart. The surface " +
+      "whose storage is the body reports no `content` of its own — that is the " +
+      "top-level `body` field above it (which is also the one that pages) — and is " +
+      "flagged `isBody: true`. Read `surfaces` before writing: it is what tells you " +
+      "that a paper's notes are NOT its draft, and that a song's body is ChordPro.",
     inputSchema: {
       type: "object",
       properties: {
@@ -186,13 +229,41 @@ export const itemTools: McpTool[] = [
         matchState: r.matchState,
       }));
 
+      // The type's named surfaces with their stored content (ADR-260). One
+      // request-cached type lookup, no per-surface fan-out. The body-storage
+      // surface deliberately carries no content: it would duplicate `body`
+      // verbatim (doubling a long paper's cost) and would sidestep the paging
+      // above, so it is reported as `isBody` and points back at that field.
+      const surfaces = (await resolveSurfaces(item)).map((sf) => {
+        const isBody = sf.storage.kind === "body";
+        return {
+          id: sf.id,
+          label: sf.label,
+          storage: sf.storage,
+          format: sf.format,
+          description: sf.description,
+          ...(sf.elements ? { elements: sf.elements } : {}),
+          empty: sf.empty,
+          ...(sf.primary ? { primary: true } : {}),
+          ...(sf.readOnly ? { readOnly: true } : {}),
+          ...(isBody ? { isBody: true } : { content: sf.content }),
+        };
+      });
+      // Only worth reporting when the type actually has more than the plain body,
+      // so an ordinary note/task response is byte-for-byte what it always was.
+      const surfaceView =
+        surfaces.length > 1 || surfaces.some((sf) => !("isBody" in sf))
+          ? { surfaces }
+          : {};
+
       const fullText = bodyMarkdown(item.body);
       const paging = bodyOffset !== undefined || bodyLimit !== undefined;
       // A normal-size body (and no explicit paging) returns whole and byte-for-
       // byte unchanged — the body contract is untouched. Only a large body, or a
       // caller that explicitly pages, takes the windowed path below.
+      const recurrence = recurrenceView(item.properties);
       if (!isLargeBody(fullText) && !paging) {
-        return { ...rowView(item), body: fullText, related: relatedView };
+        return { ...rowView(item), body: fullText, ...recurrence, ...surfaceView, related: relatedView };
       }
 
       const win = windowBody(fullText, { offset: bodyOffset, limit: bodyLimit });
@@ -206,6 +277,8 @@ export const itemTools: McpTool[] = [
       return {
         ...rowView(item),
         body,
+        ...recurrence,
+        ...surfaceView,
         bodyInfo: {
           totalChars: win.totalChars,
           offset: win.offset,
@@ -330,21 +403,34 @@ export const itemTools: McpTool[] = [
       "Friday' (type=task, title, dueDate), or capture a note. Body is markdown " +
       "(bodyMarkdown). Use relateTo to link the new item to existing items by id " +
       "(e.g. relate a task to a person). Items default to filed (not in " +
-      "the inbox); set inbox=true to capture for later triage. Call list_types " +
-      "first if unsure which type or custom properties exist.",
+      "the inbox) unless the owner routed Claude's captures elsewhere in their " +
+      "Capture settings; set inbox=true to capture for later triage. Call list_types " +
+      "first if unsure which type or custom properties exist. Pass parentId to " +
+      "file it as a SUBTASK under another item. For a task that REPEATS, create " +
+      "it first, then call set_recurrence on the new id.",
     inputSchema: {
       type: "object",
       properties: {
         type: { type: "string", description: "Type key (task, event, note, link, person, or a custom type — see list_types)." },
         title: { type: "string", description: "Item title." },
-        bodyMarkdown: { type: "string", description: "Body as markdown. To link inline to another item so it renders as Ledgr's native @-mention chip and auto-creates a relation, write [@Title](ledgr://item/<id>) (look up the id via search_items/list_items first)." },
-        status: { type: "string", enum: [...ITEM_STATUSES], description: "Status (default open)." },
-        dueDate: { type: "string", description: "Due date, ISO 8601 (e.g. 2026-06-19). Tasks only, conventionally." },
+        bodyMarkdown: { type: "string", description: "Body as markdown (also accepted as `body`). To link inline to another item so it renders as Ledgr's native @-mention chip and auto-creates a relation, write [@Title](ledgr://item/<id>) (look up the id via search_items/list_items first)." },
+        status: { type: "string", description: "Starting status. Accepts the status KEY or its LABEL from list_types (e.g. 'active' or 'Active' for a goal). Omit to get the type's default starting stage — which for a type with named stages is often NOT the one you want, so pass this explicitly when the stage matters. A name the type doesn't have is rejected with the list of its real ones." },
+        dueDate: { type: "string", description: "Due date (the deadline), ISO 8601 (e.g. 2026-06-19). Tasks only, conventionally." },
+        scheduledDate: { type: "string", description: "Planned date — the day you intend to WORK on it, as opposed to dueDate (the deadline). ISO 8601. This is what Today/Planner and a recurring series read." },
+        parentId: {
+          type: "string",
+          description:
+            "File this item as a SUBTASK (child) of that item id. Any type can " +
+            "nest under any other; a task under a task is the checklist case. " +
+            "The parent's 'n of m done' rollup counts task-type children. To " +
+            "add several children at once use add_subtasks instead.",
+        },
         meetingAt: { type: "string", description: "Event start time, ISO 8601 date-time. Events only." },
         urgency: { type: "number", enum: [...URGENCIES], description: "Priority 1–6 (tasks; 1 highest)." },
         url: { type: "string", description: "URL (links)." },
         properties: { type: "object", description: "Custom property values keyed by the type's property keys (see list_types)." },
-        inbox: { type: "boolean", description: "true = capture into the inbox for later triage; default false (filed)." },
+        inbox: { type: "boolean", description: "true = capture into the inbox for later triage; default false (filed). Beats `source` whenever both are sent." },
+        source: { type: "string", description: "Which arrival path this came from, when it isn't you: one of quick_capture, share_target, web_clipper, email_in, todoist, mention_create, ai_mcp. The owner's Capture settings say where each one files. Omit it and `inbox` both, and this lands wherever they route ai_mcp (filed, by default)." },
         relateTo: { type: "array", items: { type: "string" }, description: "Item ids to relate this new item to (confirmed edges)." },
       },
       required: ["type"],
@@ -352,7 +438,12 @@ export const itemTools: McpTool[] = [
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     handler: async (ownerId, args) => {
-      const raw = buildWriteRaw(args, ["type"]);
+      const raw = buildWriteRaw(args, ["type", "source"], ["relateTo"]);
+      // Name the arrival path when the caller named neither (ADR-249), so the
+      // owner can route what Claude files. Purely additive: a caller that sends
+      // `inbox` still wins outright, and ai_mcp defaults to filed, which is what
+      // an omitted `inbox` has always meant here.
+      if (raw.inbox === undefined && raw.source === undefined) raw.source = "ai_mcp";
       const input = parseItemPayload(raw, "create");
       const created = await createItem(ownerId, input);
       const relateTo = optUuidArray(args, "relateTo");
@@ -369,21 +460,41 @@ export const itemTools: McpTool[] = [
       "Update fields on an existing item by id: title, status (e.g. mark a task " +
       "done), due date, urgency, body (bodyMarkdown replaces the whole body), " +
       "custom properties, etc. Only the fields you pass change. To change an " +
-      "item's relations use the relations on create_item, not this tool.",
+      "item's relations use the relations on create_item, not this tool. Marking " +
+      "a RECURRING task done here is the right way to complete its current " +
+      "occurrence: the series advances to the next date instead of closing. To " +
+      "change the repeat rule itself, use set_recurrence, not properties. " +
+      "On a BESPOKE type, write to a named SURFACE instead of guessing: pass " +
+      "`surface` (an id from list_types/get_item, e.g. \"notes\") with `content`, " +
+      "and it lands wherever that surface actually lives. This is how you add " +
+      "notes to a paper without touching its draft, or to a song without " +
+      "corrupting its ChordPro chart. Read-only surfaces (a paper's Shape, Quote " +
+      "Bank and Outline) are refused with the list of writable ids.",
     inputSchema: {
       type: "object",
       properties: {
         id: { type: "string", description: "The item id (UUID)." },
         title: { type: "string", description: "New title." },
-        bodyMarkdown: { type: "string", description: "New body markdown (replaces the entire body). To link inline to another item so it renders as Ledgr's native @-mention chip and auto-creates a relation, write [@Title](ledgr://item/<id>) (look up the id via search_items/list_items first)." },
-        status: { type: "string", enum: [...ITEM_STATUSES], description: "New status." },
-        dueDate: { type: "string", description: "New due date (ISO 8601), or null to clear." },
+        bodyMarkdown: { type: "string", description: "New body markdown, replacing the entire body (also accepted as `body`). To link inline to another item so it renders as Ledgr's native @-mention chip and auto-creates a relation, write [@Title](ledgr://item/<id>) (look up the id via search_items/list_items first)." },
+        status: { type: "string", description: "New status. Accepts the status KEY or its LABEL from list_types (e.g. 'waiting' or 'Waiting for Others' on a project). This is how you set a CUSTOM stage; it is not limited to open/done/archived. A name the type doesn't have is rejected with the list of its real ones." },
+        dueDate: { type: "string", description: "New due date / deadline (ISO 8601), or null to clear." },
+        scheduledDate: { type: "string", description: "New planned date — the day you intend to work on it (ISO 8601), or null to clear. On a recurring task this is the next occurrence, so prefer letting status=done advance it." },
+        parentId: {
+          type: "string",
+          description:
+            "Re-parent this item: the id of the item it should become a SUBTASK " +
+            "of, or null to lift it back to the top level. Its own children " +
+            "travel with it. A cycle (making an item its own descendant) is " +
+            "rejected.",
+        },
         meetingAt: { type: "string", description: "New meeting time (ISO 8601), or null to clear." },
         urgency: { type: "number", enum: [...URGENCIES], description: "New priority 1–6, or null to clear." },
         url: { type: "string", description: "New URL, or null to clear." },
         properties: { type: "object", description: "Replace the whole custom-properties object. Prefer propertyPatch to change one key without clobbering the rest." },
-        propertyPatch: { type: "object", description: "Merge these custom-property keys into the existing properties (atomic per-key; other keys untouched). Set a key to null to clear it." },
+        propertyPatch: { type: "object", description: "Merge these custom-property keys into the existing properties (atomic per-key; other keys untouched). Set a key to null to clear it. An image-kind property takes an image URL string, or null to remove it." },
         inbox: { type: "boolean", description: "Move into (true) or out of (false) the inbox." },
+        surface: { type: "string", description: "Write to this named surface instead of a specific field — an id from the type's `surfaces` (list_types / get_item), e.g. \"notes\", \"draft\", \"chart\". Requires `content`. Routes to the body or the backing property automatically, so a caller never has to know which. Read-only surfaces are refused." },
+        content: { type: "string", description: "The content to write to `surface`, replacing what it holds. Use the surface's own `format`: markdown for a paper's Notes or Draft, ChordPro for a song's Chart." },
       },
       required: ["id"],
       additionalProperties: false,
@@ -391,7 +502,59 @@ export const itemTools: McpTool[] = [
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     handler: async (ownerId, args) => {
       const id = asUuid(args.id, "id");
-      const patch = parseItemPayload(buildWriteRaw(args, ["propertyPatch"]), "patch");
+      // A surface-targeted write (ADR-260) is translated into the ordinary patch
+      // fields BEFORE parsing, so it goes down exactly the same validation,
+      // revision-snapshot and body_text path as a direct write. `content` alone
+      // is meaningless, and `surface` alone is a no-op, so both are required
+      // together and rejected clearly rather than silently ignored.
+      const surfaceId = optString(args, "surface");
+      const surfaceContent = optString(args, "content");
+      if ((surfaceId === undefined) !== (surfaceContent === undefined)) {
+        throw new ItemError(
+          "bad_request",
+          "`surface` and `content` go together: pass both to write a named surface, or neither"
+        );
+      }
+      if (surfaceId !== undefined && surfaceContent !== undefined) {
+        const { type } = await getItemType(ownerId, id);
+        const defs = await listTypes({ includeHidden: true });
+        const capability = defs.find((t) => t.key === type)?.capability ?? null;
+        const target = resolveSurfaceTarget(type, surfaceId, capability);
+        if (!target.ok) {
+          throw new ItemError(
+            "bad_request",
+            target.reason === "unknown"
+              ? `unknown surface '${surfaceId}' on type '${type}'; it has: ${target.known.join(", ")}`
+              : `surface '${surfaceId}' is read-only (it is structured or derived — edit what it is built from); writable surfaces: ${target.known.join(", ")}`
+          );
+        }
+        // The body write goes in as a plain markdown wrapper; createItem/
+        // updateItem re-stamp it with the type's canonical format, so a song's
+        // chart is stored as chordpro without this path knowing about formats.
+        if (target.surface.storage.kind === "body") {
+          args = { ...args, bodyMarkdown: surfaceContent };
+        } else if (target.surface.storage.kind === "property") {
+          const prev = (args.propertyPatch ?? {}) as Record<string, unknown>;
+          args = {
+            ...args,
+            propertyPatch: { ...prev, [target.surface.storage.key]: surfaceContent },
+          };
+        }
+        delete (args as Record<string, unknown>).surface;
+        delete (args as Record<string, unknown>).content;
+      }
+      const patch = parseItemPayload(buildWriteRaw(args, ["propertyPatch"], ["id"]), "patch");
+      // Catch the empty patch here, where we can name the tool's own fields
+      // (bodyMarkdown especially — the shared lib's "no fields to update"
+      // can't mention it, and used to fire exactly when a caller mis-named it).
+      if (Object.keys(patch).length === 0) {
+        throw new ItemError(
+          "bad_request",
+          "no fields to update: pass at least one of title, bodyMarkdown, status, " +
+            "dueDate, scheduledDate, meetingAt, urgency, url, parentId, " +
+            "properties, propertyPatch, inbox"
+        );
+      }
       const updated = await updateItem(ownerId, id, patch);
       return rowView(updated);
     },

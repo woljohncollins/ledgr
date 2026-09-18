@@ -1,18 +1,17 @@
-// Web clipper bookmarklet generator (ADR-100, ADR-160). The clipper needs a
-// bookmarklet carrying an api-scoped token. Two ways to get one: click Generate
-// to mint a clipper token in-browser (signed with LEDGR_CLIPPER_SECRET, its own
-// kill switch), or paste an existing token (a CLI/static one). Either way the
-// token is baked into the draggable bookmarklet entirely client-side and never
-// leaves the browser. Drag the link to the bookmarks bar; clicking it on any
-// page POSTs the page to /api/machine/capture.
+// Web clipper bookmarklet (ADR-100, ADR-160, ADR-238). The bookmarklet carries
+// NO credential: it hands the captured page to a popup on Ledgr's own origin,
+// and that popup saves as the signed-in owner. So this is a static draggable
+// link, the same URL for anyone on this instance — drag it once, and the first
+// click while signed out sends the popup through sign-in and saves from there
+// on. (Before ADR-238 a token was baked into the URL, which meant minting one,
+// keeping the bookmark secret, and rotating an env var to revoke it.)
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { mintClipperToken } from "@/lib/auth/mint-actions";
+import { useEffect, useRef } from "react";
 
 // Reads the live DOM (no script injection, so page CSP can't block it),
-// extraction + image-stripping happen server-side. {TOKEN}/{ORIGIN} are filled
-// in below. Kept terse: a bookmarklet is one URL.
+// extraction + image-stripping happen server-side. {ORIGIN} is filled in below.
+// Kept terse: a bookmarklet is one URL.
 //
 // The actual save happens through a popup on Ledgr's own origin
 // (/capture/relay), not a fetch() from inside the host page: some sites (e.g.
@@ -20,134 +19,60 @@ import { mintClipperToken } from "@/lib/auth/mint-actions";
 // fetch() from their page, which otherwise surfaces as a bare "Failed to
 // fetch" with no workaround available from inside that page. Opening a
 // popup and handing the captured data over via postMessage sidesteps that
-// entirely, since the POST is then made from Ledgr's own page.
-function buildBookmarklet(origin: string, token: string): string {
+// entirely, since the POST is then made from Ledgr's own page — and that page,
+// being Ledgr's own origin, carries the owner's session, which is what lets the
+// bookmarklet stay credential-free.
+//
+// The ready/send handshake repeats rather than firing once: when the popup
+// lands on sign-in first, the relay page that finally announces itself is a
+// SECOND page load, and a one-shot listener would have already been torn down
+// by then. So we answer every "ready" ping — until the relay says it saved,
+// which retires the listener so a later reload of that popup can't re-send the
+// clip and file it twice.
+export function buildBookmarklet(origin: string): string {
   const relay = origin + "/capture/relay";
-  const src = `(function(){var d={token:${JSON.stringify(
-    token
-  )},url:location.href,title:document.title,html:document.documentElement.outerHTML};var w=window.open(${JSON.stringify(
+  const src = `(function(){var d={url:location.href,title:document.title,html:document.documentElement.outerHTML};var w=window.open(${JSON.stringify(
     relay
-  )},"ledgr-clip","width=380,height=200");if(!w){alert("Ledgr: please allow pop-ups for this site, then try again");return}function onMsg(e){if(e.source!==w||e.data!=="ledgr-relay-ready")return;window.removeEventListener("message",onMsg);w.postMessage(d,${JSON.stringify(
+  )},"ledgr-clip","width=380,height=200");if(!w){alert("Ledgr: please allow pop-ups for this site, then try again");return}function m(e){if(e.source!==w)return;if(e.data==="ledgr-relay-ready")w.postMessage(d,${JSON.stringify(
     origin
-  )})}window.addEventListener("message",onMsg)})();`;
+  )});else if(e.data==="ledgr-relay-saved")window.removeEventListener("message",m)}window.addEventListener("message",m)})();`;
   return "javascript:" + encodeURIComponent(src);
 }
 
-export default function ClipperSetup({
-  origin,
-  canMint = false,
-}: {
-  origin: string;
-  canMint?: boolean;
-}) {
-  const [token, setToken] = useState("");
-  const [minting, setMinting] = useState(false);
-  const [mintError, setMintError] = useState<string | null>(null);
+export default function ClipperSetup({ origin }: { origin: string }) {
   const linkRef = useRef<HTMLAnchorElement>(null);
-  const trimmed = token.trim();
-
-  async function mint() {
-    setMinting(true);
-    setMintError(null);
-    try {
-      const res = await mintClipperToken();
-      if ("token" in res) setToken(res.token);
-      else setMintError(res.error);
-    } catch {
-      setMintError("Couldn't generate a token — try again.");
-    } finally {
-      setMinting(false);
-    }
-  }
 
   // Set the href imperatively: React sanitizes `javascript:` hrefs in JSX, so
   // we write the attribute straight to the DOM node instead.
   useEffect(() => {
-    const el = linkRef.current;
-    if (!el) return;
-    if (trimmed) {
-      el.setAttribute("href", buildBookmarklet(origin, trimmed));
-    } else {
-      el.removeAttribute("href");
-    }
-  }, [origin, trimmed]);
+    linkRef.current?.setAttribute("href", buildBookmarklet(origin));
+  }, [origin]);
 
   return (
     <div className="mt-4 flex flex-col gap-3">
-      {canMint && (
-        <div>
-          <button
-            onClick={() => void mint()}
-            disabled={minting}
-            className="self-start rounded-lg border border-[var(--accent)]/40 bg-[var(--accent)]/15 px-3.5 py-2 text-sm font-semibold text-[var(--accent)] hover:bg-[var(--accent)]/25 disabled:opacity-50"
-          >
-            {minting ? "Generating…" : token ? "Generate another token" : "Generate a clipper token"}
-          </button>
-          {mintError && <p className="mt-1 text-xs text-red-400">{mintError}</p>}
-          {token && (
-            <p className="mt-1 text-xs text-amber-500/90">
-              Token generated and loaded into the bookmarklet below — drag it now.
-              Generating another won&rsquo;t revoke this one.
-            </p>
-          )}
-        </div>
-      )}
-      <div>
-        <label className="mb-1 block text-xs text-neutral-500">
-          {canMint ? "…or paste an existing api-scoped token" : "Paste an api-scoped token"}
-          . It&rsquo;s baked into the bookmarklet and stays in your browser.
-        </label>
-        <input
-          type="text"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          placeholder="paste token here"
-          spellCheck={false}
-          autoComplete="off"
-          className="w-full rounded border border-neutral-800 bg-neutral-900 px-2.5 py-1.5 font-mono text-xs text-neutral-300 placeholder:text-neutral-600 focus:border-neutral-600 focus:outline-none"
-        />
-      </div>
-
       <div className="flex flex-wrap items-center gap-3">
         <a
           ref={linkRef}
-          draggable={!!trimmed}
+          draggable
           onClick={(e) => e.preventDefault()}
-          aria-disabled={!trimmed}
-          className={`inline-flex items-center gap-2 rounded-lg border px-3.5 py-2 text-sm font-semibold ${
-            trimmed
-              ? "cursor-grab border-[var(--accent)]/40 bg-[var(--accent)]/15 text-[var(--accent)] active:cursor-grabbing"
-              : "cursor-not-allowed border-neutral-800 bg-neutral-900 text-neutral-600"
-          }`}
+          className="inline-flex cursor-grab items-center gap-2 rounded-lg border border-[var(--accent)]/40 bg-[var(--accent)]/15 px-3.5 py-2 text-sm font-semibold text-[var(--accent)] active:cursor-grabbing"
         >
           📎 Clip to Ledgr
         </a>
         <span className="text-xs text-neutral-500">
-          {trimmed
-            ? "Drag this to your bookmarks bar."
-            : "Paste a token to activate."}
+          Drag this to your bookmarks bar.
         </span>
       </div>
 
       <p className="text-xs leading-relaxed text-neutral-500">
-        On desktop: drag the button to your bookmarks bar, then click it on any
-        page to save it (with its readable content, images stripped) to your
-        Inbox. It briefly opens a small Ledgr popup to do the save (works
-        around sites that block cross-site requests, e.g. YouTube) — allow
-        pop-ups for it if your browser asks. On mobile, share a link to the
-        installed Ledgr app instead — the share sheet route captures content
-        the same way. The token sits in the bookmark, so treat the bookmark as
-        a secret. To revoke: for a generated token, rotate{" "}
-        <code className="rounded bg-neutral-800 px-1 py-0.5 font-mono text-[11px] text-neutral-400">
-          LEDGR_CLIPPER_SECRET
-        </code>{" "}
-        and redeploy — that kills every clipper token at once but leaves MCP and
-        your phone connector untouched. For a pasted CLI token, remove its entry
-        from{" "}
-        <code className="rounded bg-neutral-800 px-1 py-0.5 font-mono text-[11px] text-neutral-400">
-          LEDGR_API_TOKENS
-        </code>
-        .
+        Then click it on any page to save it, with its readable content and its
+        images stripped, wherever you routed the Web clipper above. It briefly
+        opens a small Ledgr popup to do the
+        save (which also works around sites that block cross-site requests, e.g.
+        YouTube) — allow pop-ups for it if your browser asks. If you&rsquo;re not
+        signed in to Ledgr, that popup asks you to sign in the first time, then
+        saves. The bookmark holds no password or token, so it&rsquo;s safe to
+        keep and nothing needs revoking.
       </p>
     </div>
   );

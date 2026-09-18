@@ -30,7 +30,16 @@ const MARKDOWN = { format: "markdown", text: "# Heading\n\nWorthy is the **Lamb*
 check("songs module registered", moduleForType("song")?.id === "songs");
 check("song resolves the chord canvas", canvasIdForType("song") === "chord");
 check("song resolves the chordpro format", canonicalFormatForType("song") === "chordpro");
-check("core types unaffected", canvasIdForType("note") === "markdown" && canonicalFormatForType("task") === "markdown");
+// Core resolution must be untouched by registering a module. `note` resolves the
+// LONGFORM canvas, not the plain markdown one (ADR-157) — this line asserted
+// "markdown" and had been failing silently ever since, because nothing ran it.
+// The point is that note keeps its OWN core canvas rather than picking up the
+// song's chord canvas, so name that canvas rather than assuming the default.
+check(
+  "core types unaffected",
+  canvasIdForType("note") === "longform" && canonicalFormatForType("task") === "markdown",
+  `note canvas=${canvasIdForType("note")} task format=${canonicalFormatForType("task")}`
+);
 
 // ── FTS body-text branches on format ──────────────────────────────────────────
 const songText = extractBodyText(CHORDPRO) ?? "";

@@ -97,6 +97,33 @@ export default function StatusSchemaEditor({
       ];
     });
   }
+  // Reorder a status WITHIN its category (Tyler, 2026-08-25). A board's columns
+  // read left to right in category order first (Not Started → In Progress → Done
+  // → Closed) and then in this array's order inside each category — so without
+  // this control a status added later was pinned to the end of its group forever
+  // ("Blocked" stranded after "Future"), and the only fix was deleting and
+  // recreating statuses. Swapping two SAME-CATEGORY entries can't disturb the
+  // category grouping, which is why this is a plain positional swap.
+  function move(key: string, dir: -1 | 1) {
+    setRows((rs) => {
+      const row = rs.find((r) => r.key === key);
+      if (!row) return rs;
+      // Indices of this category's rows, in array order.
+      const sameCat = rs.reduce<number[]>((acc, r, i) => {
+        if (r.category === row.category) acc.push(i);
+        return acc;
+      }, []);
+      const pos = sameCat.indexOf(rs.findIndex((r) => r.key === key));
+      const to = pos + dir;
+      if (pos < 0 || to < 0 || to >= sameCat.length) return rs;
+      const a = sameCat[pos];
+      const b = sameCat[to];
+      const next = [...rs];
+      [next[a], next[b]] = [next[b], next[a]];
+      return next;
+    });
+  }
+
   // One default per category (a radio); clears the flag on the others in it.
   function setDefault(category: StatusCategory, key: string) {
     setRows((rs) =>
@@ -231,6 +258,33 @@ export default function StatusSchemaEditor({
                           />
                           default
                         </label>
+                        {/* Order within this category = board column order. */}
+                        <div className="flex shrink-0 flex-col">
+                          <button
+                            type="button"
+                            onClick={() => move(s.key, -1)}
+                            disabled={inCat[0]?.key === s.key}
+                            className="rounded px-1 text-neutral-500 hover:text-neutral-200 disabled:opacity-25 disabled:hover:text-neutral-500"
+                            aria-label={`Move ${s.label} earlier`}
+                            title="Move earlier (further left on a board)"
+                          >
+                            <svg aria-hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3">
+                              <path d="M6 15l6-6 6 6" />
+                            </svg>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => move(s.key, 1)}
+                            disabled={inCat[inCat.length - 1]?.key === s.key}
+                            className="rounded px-1 text-neutral-500 hover:text-neutral-200 disabled:opacity-25 disabled:hover:text-neutral-500"
+                            aria-label={`Move ${s.label} later`}
+                            title="Move later (further right on a board)"
+                          >
+                            <svg aria-hidden viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3">
+                              <path d="M6 9l6 6 6-6" />
+                            </svg>
+                          </button>
+                        </div>
                         <button
                           type="button"
                           onClick={() => remove(s.key)}

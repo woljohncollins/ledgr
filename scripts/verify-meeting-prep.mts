@@ -89,7 +89,10 @@ try {
   check("a meeting with no people yields empty prep", emptyPrep.attending.length === 0 && emptyPrep.openTasks.length === 0);
 
   // --- action-item -> task promotion --------------------------------------
-  const task = await promoteActionItem(ownerId, meeting, "  Follow up on the memo  ");
+  const { task } = await promoteActionItem(ownerId, meeting, {
+    type: "task",
+    title: "  Follow up on the memo  ",
+  });
   check("promotion creates a trimmed, open, non-inbox task", task.type === "task" && task.title === "Follow up on the memo" && task.status === "open" && task.inbox === false);
   const taskRels = await db
     .select({ targetId: relations.targetId, sourceId: relations.sourceId })
@@ -103,14 +106,29 @@ try {
   check("promoted task shows up in the next prep read", prep2.openTasks.some((t) => t.id === task.id));
 
   // Block-linked promotion (ADR-090): a body + the line's ^id anchor ride along.
-  const linked = await promoteActionItem(ownerId, meeting, "Email the budget", {
-    body: "- detail one\n- detail two",
-    blockRef: "a1b2c3",
-  });
+  // The capture card's parsed fields ride through: body, priority, due date and
+  // the edges it already resolved, alongside the source anchor.
+  const { task: linked } = await promoteActionItem(
+    ownerId,
+    meeting,
+    {
+      type: "task",
+      title: "Email the budget",
+      body: { format: "markdown", text: "- detail one\n- detail two" },
+      urgency: 2,
+      dueDate: new Date("2030-01-05T00:00:00.000Z"),
+    },
+    { blockRef: "a1b2c3", relateTo: [{ targetId: roger, role: "related" }] }
+  );
   const src = (linked.properties as { source?: { itemId?: string; blockRef?: string } } | null)?.source;
   check("block-linked promotion stores source.itemId + blockRef", src?.itemId === meeting && src?.blockRef === "a1b2c3");
   const linkedBody = (linked.body as { text?: string } | null)?.text ?? "";
   check("block-linked promotion carries the pulled sub-bullets as the task body", linkedBody.includes("detail one") && linkedBody.includes("detail two"));
+  check(
+    "promotion carries the capture card's parsed priority + due date",
+    linked.urgency === 2 && linked.dueDate?.toISOString().slice(0, 10) === "2030-01-05",
+    `urgency=${linked.urgency} due=${String(linked.dueDate)}`
+  );
 
   // --- owner scoping ------------------------------------------------------
   const [otherUser] = await db.insert(users).values({ email: `verify-prep-other-${Date.now()}@example.invalid` }).returning({ id: users.id });

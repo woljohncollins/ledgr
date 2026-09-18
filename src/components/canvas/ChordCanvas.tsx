@@ -20,7 +20,12 @@ export default async function ChordCanvas({ item, ownerId }: CanvasProps) {
 
   return (
     <>
-      <ChordCanvasClient itemId={item.id} initialTitle={item.title} initialBody={item.body} />
+      <ChordCanvasClient
+        itemId={item.id}
+        initialTitle={item.title}
+        initialBody={item.body}
+        initialProperties={item.properties}
+      />
       {/* Properties: scalar + relation fields under one header (the canvas
           redesign), matching the default canvas. */}
       {propertySchema.length > 0 && (

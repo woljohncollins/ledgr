@@ -13,10 +13,12 @@
 // (modules.ts resolvers fall back for any unregistered type), so the builder
 // never touches code — it writes label/icon/property_schema, and the registry
 // owns code behavior (ADR-043).
+import { cache } from "react";
 import { eq, isNull, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import { items, types } from "@/db/schema";
 import { parseCanvasLayout, type CanvasLayout } from "@/lib/canvas-layout";
+import { parseComposition, type Composition } from "@/lib/composition";
 import {
   isStatusMode,
   parseStatusSchema,
@@ -36,18 +38,34 @@ import { capabilityById } from "@/lib/modules";
 import "@/lib/modules/register";
 
 // The core property kinds (schema.md "Property kinds"). text/number/date/
-// checkbox/url are scalar; select/multi_select carry an options list. `relation`
-// is a typed item-to-item link the user adds in the builder (ADR-067, un-deferred
-// from ADR-044/055): unlike the scalar kinds it stores no value in
+// checkbox/url/phone/email are scalar; select/multi_select carry an options list.
+// `relation` is a typed item-to-item link the user adds in the builder (ADR-067,
+// un-deferred from ADR-044/055): unlike the scalar kinds it stores no value in
 // items.properties — its value lives as `relations` edges whose `role` is the
 // field's `key` (an "Author" field => edges with role 'author'). It carries a
 // targetType (which type the links accept; null = any) and a cardinality.
+//
+// `phone` and `email` (ADR-192) are `text` with a declared intent: they store the
+// string EXACTLY as typed and differ only in how they render — a `tel:`/`mailto:`
+// link, and the matching on-screen keyboard. They exist because the intent was
+// previously guessed from the field's key ("phone", "mobile", "cell"), which
+// worked or silently didn't depending on what the field was named. Nothing
+// validates or reformats the value: a field that refuses a valid phone number is
+// worse than one that renders an odd one, and phone formats are a swamp
+// (extensions, country codes, "x203", letters). Normalization happens only when
+// building the href — see telHref in lib/contact-links.ts.
 export const PROPERTY_KINDS = [
   "text",
   "number",
   "date",
   "checkbox",
   "url",
+  // An image property stores the same plain string a url does (an http(s) URL
+  // or a stable /files/<id> attachment address, ADR-228); the kind only
+  // changes rendering (ADR-255).
+  "image",
+  "phone",
+  "email",
   "select",
   "multi_select",
   "relation",
@@ -82,6 +100,13 @@ export type PropertyDef = {
   // every existing filter/sort on the start key is untouched. Unset = a single
   // date. Declared once here, so no manual "which field is the end" wiring.
   withEnd?: boolean;
+  // `date` kind only (ADR-254): when true the field carries a wall-clock TIME as
+  // well as a day. The value is then a full ISO instant ("2026-09-11T02:06:00Z")
+  // instead of a day scalar ("2026-09-10"); readers tell the two apart by length
+  // (placement.ts propInstant), so a field flipped on later keeps its old
+  // day-only values readable, and a cleared time falls back to a day. Combined
+  // with withEnd, one field is a timed range (a work-log entry's 9:06–9:15 PM).
+  withTime?: boolean;
 };
 
 export type TypeDefinition = {
@@ -100,6 +125,11 @@ export type TypeDefinition = {
   // chips/checkboxes. Presentation only; status_category stays the plumbing.
   statusMode: StatusMode;
   showInQuickCapture: boolean;
+  // Whether this type's items show a Listen (read-aloud) control on the canvas.
+  listenEnabled: boolean;
+  // Nested under listenEnabled: redirect to Microsoft Edge instead of playing
+  // locally, when the browser supports it and isn't already Edge.
+  listenOpenInEdge: boolean;
   // SPIKE (bespoke-tool catalog): the attached module-capability id, or null.
   // The registry (modules.ts) resolves this type's canvas/format/exporters from
   // it when set — see canvasIdForType's third arg.
@@ -208,6 +238,9 @@ export function parsePropertySchema(raw: unknown): PropertyDef[] {
     // Tolerant: only honored for `date`, only when literally true.
     if (def.kind === "date" && e.withEnd === true) {
       def.withEnd = true;
+    }
+    if (def.kind === "date" && e.withTime === true) {
+      def.withTime = true;
     }
     if (KINDS_WITH_OPTIONS.includes(def.kind)) {
       if (!Array.isArray(e.options)) bad(`property '${key}' needs options`);
@@ -322,6 +355,8 @@ function rowToDefinition(row: typeof types.$inferSelect): TypeDefinition {
     // multi-status type's own statuses); otherwise unset resolves to 'none'.
     statusMode: resolveStatusMode(row.statusMode, statusSchema != null),
     showInQuickCapture: row.showInQuickCapture,
+    listenEnabled: row.listenEnabled,
+    listenOpenInEdge: row.listenOpenInEdge,
     capability: row.capability,
     hidden: row.hidden,
     canvasLayout: parseCanvasLayout(row.canvasLayout),
@@ -336,10 +371,13 @@ function rowToDefinition(row: typeof types.$inferSelect): TypeDefinition {
 // Soft-deleted types always drop out. Hidden types (ADR-059) drop out of the
 // everyday surfaces too — pass includeHidden:true on the Build → Types page,
 // where the whole point is to see and un-hide them.
-export async function listTypes(
-  opts: { includeHidden?: boolean } = {}
-): Promise<TypeDefinition[]> {
-  const where = opts.includeHidden
+// The cached inner is keyed on a PRIMITIVE (cache() compares arguments by
+// identity, so an options object literal would never hit). Nav and pages both
+// list types on every render; cache() folds those into one query per request,
+// the resolveOwnerState pattern (owner.ts). Passthrough in route handlers, so
+// type mutations never read stale.
+const listTypesCached = cache(async (includeHidden: boolean): Promise<TypeDefinition[]> => {
+  const where = includeHidden
     ? isNull(types.deletedAt)
     : sql`${types.deletedAt} is null and ${types.hidden} = false`;
   const rows = await getDb().select().from(types).where(where);
@@ -350,6 +388,33 @@ export async function listTypes(
         Number(b.isSystem) - Number(a.isSystem) ||
         a.label.localeCompare(b.label)
     );
+});
+
+export async function listTypes(
+  opts: { includeHidden?: boolean } = {}
+): Promise<TypeDefinition[]> {
+  return listTypesCached(opts.includeHidden === true);
+}
+
+// Whether an item of this type may belong to SEVERAL records at once (ADR-232).
+// Derived, never configured: a type with no completion concept (statusMode
+// "none" — note, event, link) is a RESOURCE. It can be relevant to two projects
+// without living in either, so attaching it to a second record adds a plain
+// `related` edge and leaves its home alone. A type that COMPLETES (task,
+// milestone) rolls up into one record's progress bar and one record's
+// completion sweep, so it lives in exactly one and attaching MOVES it.
+//
+// Deriving it rather than adding a per-type flag reproduces the split exactly
+// (Brandon + Tyler, 2026-08-28) with nothing to configure. The tradeoff is
+// real and worth knowing: giving a type a Done checkbox in Build narrows it to
+// one record from then on. Existing second edges are left alone (they are
+// `related`, which the completion sweep does not touch), they simply stop
+// being created for that type.
+export async function mayLiveInManyRecords(typeKey: string): Promise<boolean> {
+  const t = await getType(typeKey).catch(() => null);
+  // Unknown type: fall back to the containing behavior, which is what every
+  // attach did before this rule existed.
+  return t?.statusMode === "none";
 }
 
 export async function getType(key: string): Promise<TypeDefinition> {
@@ -429,6 +494,28 @@ export async function setTypeQuickCapture(
   await getDb().update(types).set({ showInQuickCapture }).where(eq(types.key, key));
 }
 
+// Toggle whether a type's items show a Listen (read-aloud) control (the Build →
+// Types "Listen" column). Mirrors setTypeQuickCapture exactly: a standalone
+// setter so the column can flip it without resending the whole definition.
+export async function setTypeListenEnabled(
+  key: string,
+  listenEnabled: boolean
+): Promise<void> {
+  await getType(key); // existence (throws not_found)
+  await getDb().update(types).set({ listenEnabled }).where(eq(types.key, key));
+}
+
+// Toggle whether Listen redirects to Microsoft Edge instead of playing locally.
+// Only meaningful when listenEnabled is also true; the UI nests this checkbox
+// under Listen, but the column itself has no DB-level dependency on it.
+export async function setTypeListenOpenInEdge(
+  key: string,
+  listenOpenInEdge: boolean
+): Promise<void> {
+  await getType(key); // existence (throws not_found)
+  await getDb().update(types).set({ listenOpenInEdge }).where(eq(types.key, key));
+}
+
 // Inline label fix (ADR-068): rename a type's display label in place from the
 // item view, without opening the full builder. Only the label moves — the key
 // (PK/FK) is untouched, so nothing is orphaned. System types are allowed (a
@@ -494,6 +581,38 @@ export async function setTypeCanvasLayout(
   const rows = await getDb()
     .update(types)
     .set({ canvasLayout: value })
+    .where(eq(types.key, key))
+    .returning();
+  return rowToDefinition(rows[0]);
+}
+
+// Save a type's DEFAULT WIDGET SET — Layer 2 of the composition model
+// (ADR-111/PJ3): which sections every record of this type shows before any
+// individual record diverges. `types.default_widgets` has been read on the render
+// path since PJ3 (resolveComposition overlays record → type → generated) but had
+// no writer anywhere in the app until ADR-181; the only editable layer was the
+// per-record one. A focused setter like setTypeCanvasLayout / setTypeStatusConfig.
+//
+// null clears it, which is not the same as an empty widget list: cleared means
+// "fall back to the generated default for this type" (the Project/Pursuit/generic
+// starting sets), while an empty list means "this type shows no sections." Both
+// are legal and different, so the caller's null-vs-[] is preserved exactly.
+export async function setTypeDefaultWidgets(
+  key: string,
+  rawComposition: unknown
+): Promise<TypeDefinition> {
+  await getType(key); // existence (throws not_found)
+  let value: Composition | null = null;
+  if (rawComposition != null) {
+    value = parseComposition(rawComposition);
+    // parseComposition is tolerant by design (bad shape → null) because it runs
+    // on the render path; a WRITE must not silently store nothing, so a shape it
+    // rejects is an error here rather than a quiet clear.
+    if (!value) bad("invalid widget composition (expected { version: 1, widgets: [...] })");
+  }
+  const rows = await getDb()
+    .update(types)
+    .set({ defaultWidgets: value })
     .where(eq(types.key, key))
     .returning();
   return rowToDefinition(rows[0]);

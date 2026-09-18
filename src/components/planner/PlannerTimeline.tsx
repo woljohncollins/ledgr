@@ -17,6 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { openItem } from "@/lib/item-nav";
 import CompleteButton from "@/components/planner/CompleteButton";
 import UnscheduledRail from "@/components/planner/UnscheduledRail";
 import { usePlannerComplete } from "@/components/planner/usePlannerComplete";
@@ -381,7 +382,7 @@ export default function PlannerTimeline({
         finish();
         if (!item) return;
         if (!moved) {
-          router.push(`/items/${d.id}`); // a press without a drag opens it
+          openItem(router, d.id); // a press without a drag opens it
           return;
         }
         const { next, onRail } = result!;

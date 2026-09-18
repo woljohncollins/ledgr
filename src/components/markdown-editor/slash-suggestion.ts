@@ -7,10 +7,15 @@
 // The toggle command is gated by the user's toggleBlocksEnabled setting: the
 // host calls setSlashToggleEnabled once settings load. It's a module-level flag
 // (app-wide, one editor focused at a time), matching the memoized settings
-// pattern in MarkdownEditor. Headings are core and always offered.
+// pattern in MarkdownEditor. Headings and lists are core and always offered.
 "use client";
 
-import { Extension, type Editor, type Range } from "@tiptap/core";
+import {
+  Extension,
+  type ChainedCommands,
+  type Editor,
+  type Range,
+} from "@tiptap/core";
 import { PluginKey } from "@tiptap/pm/state";
 import Suggestion, { type SuggestionProps } from "@tiptap/suggestion";
 import { insertToggle, wrapSelectionInToggle } from "./toggle-extension";
@@ -28,18 +33,45 @@ export function setSlashToggleEnabled(on: boolean): void {
   toggleEnabled = on;
 }
 
+// Per-editor file picker for the "/file" command. Unlike the toggle gate this
+// can't be app-wide: whether upload works depends on the HOST's uploadFile prop
+// (scratch/changelog have none), and two editors with different hosts can be
+// mounted at once. A WeakMap keyed by the editor keeps each registration scoped
+// to its instance and lets it die with the editor.
+const filePickers = new WeakMap<Editor, () => void>();
+export function setSlashFilePicker(
+  editor: Editor,
+  open: (() => void) | null
+): void {
+  if (open) filePickers.set(editor, open);
+  else filePickers.delete(editor);
+}
+
 type SlashCommand = {
   id: string;
   label: string;
   hint: string;
   keywords: string[];
-  enabled?: () => boolean;
+  enabled?: (editor: Editor) => boolean;
   run: (editor: Editor, range: Range) => void;
 };
 
 const setHeading =
   (level: 1 | 2 | 3) => (editor: Editor, range: Range) => {
     editor.chain().focus().deleteRange(range).setNode("heading", { level }).run();
+  };
+
+// Every list/block command below is one Tiptap chain applied after the "/query"
+// range is deleted, which is what makes them convert the block the caret is in
+// (usually the empty paragraph the user just typed "/" into) rather than insert a
+// second one. Taking the chain step as a callback keeps each command one readable
+// line and stays type-safe, where indexing the chain by a union of method names
+// would not. These are the same commands the toolbar buttons run
+// (MarkdownEditor.tsx groups), so the two surfaces can't drift.
+const block =
+  (apply: (chain: ChainedCommands) => ChainedCommands) =>
+  (editor: Editor, range: Range) => {
+    apply(editor.chain().focus().deleteRange(range)).run();
   };
 
 const COMMANDS: SlashCommand[] = [
@@ -63,6 +95,57 @@ const COMMANDS: SlashCommand[] = [
     hint: "Small section heading",
     keywords: ["h3", "heading"],
     run: setHeading(3),
+  },
+  {
+    id: "bulletList",
+    label: "Bulleted list",
+    hint: "Simple bulleted list",
+    keywords: ["bullet", "list", "ul", "unordered", "dash"],
+    run: block((c) => c.toggleBulletList()),
+  },
+  {
+    id: "orderedList",
+    label: "Numbered list",
+    hint: "List with numbered steps",
+    keywords: ["number", "numbered", "list", "ol", "ordered", "step"],
+    run: block((c) => c.toggleOrderedList()),
+  },
+  {
+    id: "taskList",
+    label: "Checklist",
+    hint: "Checkbox list you can tick off",
+    keywords: ["check", "checkbox", "checklist", "task", "todo", "to-do", "box"],
+    run: block((c) => c.toggleTaskList()),
+  },
+  {
+    id: "quote",
+    label: "Quote",
+    hint: "Indented quotation block",
+    keywords: ["quote", "blockquote", "citation", "excerpt"],
+    run: block((c) => c.toggleBlockquote()),
+  },
+  {
+    id: "codeBlock",
+    label: "Code block",
+    hint: "Monospaced, unformatted block",
+    keywords: ["code", "codeblock", "pre", "snippet", "monospace"],
+    run: block((c) => c.toggleCodeBlock()),
+  },
+  {
+    id: "table",
+    label: "Table",
+    hint: "3×3 table with a header row",
+    keywords: ["table", "grid", "rows", "columns", "spreadsheet"],
+    // Same shape as the toolbar's Insert table button. insertTable replaces the
+    // empty paragraph the caret is in, so no stray blank line is left above it.
+    run: block((c) => c.insertTable({ rows: 3, cols: 3, withHeaderRow: true })),
+  },
+  {
+    id: "divider",
+    label: "Divider",
+    hint: "Horizontal rule between sections",
+    keywords: ["divider", "rule", "hr", "line", "separator", "break"],
+    run: block((c) => c.setHorizontalRule()),
   },
   {
     id: "toggle",
@@ -90,11 +173,25 @@ const COMMANDS: SlashCommand[] = [
       if (!wrapSelectionInToggle(editor)) insertToggle(editor);
     },
   },
+  {
+    id: "file",
+    label: "File",
+    hint: "Upload a file and link it here",
+    keywords: ["file", "upload", "attach", "attachment", "pdf", "doc", "html"],
+    // Only offered where the host wired an uploader (see setSlashFilePicker).
+    enabled: (editor) => filePickers.has(editor),
+    // Delete the "/query" first so the picked file's link lands where the "/"
+    // was typed, then hand off to the editor's hidden any-file input.
+    run: (editor, range) => {
+      editor.chain().focus().deleteRange(range).run();
+      filePickers.get(editor)?.();
+    },
+  },
 ];
 
-function filterCommands(query: string): SlashCommand[] {
+function filterCommands(query: string, editor: Editor): SlashCommand[] {
   const q = query.trim().toLowerCase();
-  return COMMANDS.filter((c) => c.enabled?.() ?? true).filter(
+  return COMMANDS.filter((c) => c.enabled?.(editor) ?? true).filter(
     (c) =>
       q === "" ||
       c.label.toLowerCase().includes(q) ||
@@ -113,7 +210,8 @@ function suggestionConfig(editor: Editor) {
     char: "/",
     // Fires only at the start of a block or after a space (Suggestion's default
     // allowedPrefixes), so a "/" inside "http://" or "and/or" won't open it.
-    items: ({ query }: { query: string }): SlashCommand[] => filterCommands(query),
+    items: ({ query }: { query: string }): SlashCommand[] =>
+      filterCommands(query, editor),
     command: ({
       editor,
       range,
@@ -163,6 +261,11 @@ function suggestionConfig(editor: Editor) {
             cmd?.(it);
           });
           popup!.appendChild(row);
+          // The command list is taller than the popup's max-height, so arrowing
+          // down past the visible rows would move the selection off-screen. Keep
+          // the selected row scrolled into view (nearest = no jump when it's
+          // already visible). Only meaningful once the list overflows.
+          if (i === selected) row.scrollIntoView({ block: "nearest" });
         });
       };
 

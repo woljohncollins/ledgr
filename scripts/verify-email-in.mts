@@ -163,6 +163,85 @@ try {
   check("a message whose move fails counts as an error", r3.errors === 1);
   check("an errored run does NOT advance the delta token", (await getEmailState())?.deltaToken === "delta-2");
   check("the errored message's item still exists (dedup catches it next run)", !!(await findByMessageId("m5")));
+
+  // --- Run 4: the HANDOFF (ADR-221) ---------------------------------------
+  // The acceptance test for making this job claimable. `FakeMail` above answers
+  // the same reply whatever token it is handed, which is fine for engine
+  // mechanics and useless here: the entire question is what a machine that has
+  // NEVER run this job sees when it starts from nothing. So this run uses a
+  // source that models what Outlook actually does — a folder you list, and a
+  // move that takes a message out of it (GraphMailSource.markImported) — and
+  // the handoff is simulated by deleting the stored place-in-the-queue, which
+  // is exactly what a second machine has: none.
+  class FolderMail implements MailSource {
+    folder: NormalizedMessage[] = [];
+    tokenCalls: (string | null)[] = [];
+    // What this delta chain has already handed out. A null token starts a new
+    // chain, which is why a fresh machine sees the folder's whole contents.
+    private reported = new Set<string>();
+    async listNewMessages(token: string | null) {
+      this.tokenCalls.push(token);
+      if (token === null) this.reported.clear();
+      const out = this.folder.filter((m) => !this.reported.has(m.id));
+      for (const m of out) this.reported.add(m.id);
+      return { messages: out, nextDeltaToken: `folder-token-${this.tokenCalls.length}` };
+    }
+    async markImported(id: string) {
+      this.folder = this.folder.filter((m) => m.id !== id);
+      this.reported.delete(id);
+    }
+  }
+
+  // A machine that has run this job before still has its own place in the
+  // queue; clear it so the first FolderMail run is an ordinary first run.
+  await db.delete(jobState).where(eq(jobState.key, EMAIL_JOB_KEY));
+  const folderMail = new FolderMail();
+  folderMail.folder = [
+    msg({ id: "h1", subject: "Filed by the first machine", bodyText: "a" }),
+    msg({ id: "h2", subject: "task: Also filed there", bodyText: "b" }),
+  ];
+  // Machine A: a normal run. Both messages are filed and leave the folder.
+  const a1 = await runEmailImport(ownerId, folderMail);
+  check("handoff setup: the first machine files both and empties the folder",
+    a1.imported === 2 && folderMail.folder.length === 0, JSON.stringify(a1));
+
+  // Two messages arrive after that run. One of them, h4, models the crash
+  // window: the first machine created its item but died before the move, so it
+  // is still sitting in the folder looking unfiled.
+  folderMail.folder = [
+    msg({ id: "h3", subject: "Arrived after the move", bodyText: "c" }),
+    msg({ id: "h4", subject: "Created but never moved", bodyText: "d" }),
+  ];
+  await runEmailImport(ownerId, folderMail); // files h3 and h4, empties the folder
+  folderMail.folder = [msg({ id: "h4", subject: "Created but never moved", bodyText: "d" })];
+
+  // THE HANDOFF. A different machine now owns the job. It has no stored place
+  // in the queue, because that record never syncs.
+  await db.delete(jobState).where(eq(jobState.key, EMAIL_JOB_KEY));
+  folderMail.folder.push(msg({ id: "h5", subject: "Genuinely new", bodyText: "e" }));
+  folderMail.tokenCalls.length = 0;
+
+  const handoff = await runEmailImport(ownerId, folderMail);
+  check("the new machine starts from nothing, as a new machine does", folderMail.tokenCalls[0] === null);
+  check("it sees only what is still in the folder, never the filed ones",
+    handoff.imported + handoff.skipped === 2, JSON.stringify(handoff));
+  check("it imports the genuinely new message", handoff.imported === 1 && !!(await findByMessageId("h5")));
+  check("the created-but-unmoved message is recognized and skipped, not filed twice",
+    handoff.skipped === 1, JSON.stringify(handoff));
+  check("it clears the stuck message out of the folder", folderMail.folder.length === 0);
+
+  const dupes = await db.execute(sql`
+    select properties->'email'->>'internetMessageId' as mid, count(*)::int as c
+    from items where owner_id = ${ownerId} and properties ? 'email'
+    group by 1 having count(*) > 1
+  `);
+  check("after the handoff, not one message has two items", dupes.rows.length === 0, JSON.stringify(dupes.rows));
+
+  const filed = await db.execute(sql`
+    select count(*)::int as c from items
+    where owner_id = ${ownerId} and properties->'email'->>'messageId' like 'h%'
+  `);
+  check("all five handoff messages are filed exactly once", (filed.rows[0] as { c: number }).c === 5, JSON.stringify(filed.rows));
 } finally {
   await db.delete(items).where(eq(items.ownerId, ownerId));
   await db.delete(users).where(eq(users.id, ownerId));

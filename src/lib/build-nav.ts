@@ -1,7 +1,8 @@
 // The Build-mode left sidebar structure (ADR-063): the hardcoded taxonomy of
-// the system tools, grouped under three verbs — DATA (build the data model),
+// the system tools, grouped under four verbs — DATA (build the data model),
 // INTERFACE (build how you see and reach it), MAINTAIN (understand and care for
-// what exists). This is the single source of truth for two surfaces:
+// what exists), SYSTEM (the software and the machine it runs on). This is the
+// single source of truth for two surfaces:
 //
 //   1. BuildSidebar renders these groups + entries directly.
 //   2. The Work nav's destination picker offers them as a "Build tools" category
@@ -13,7 +14,7 @@
 // library. The sidebar is a system surface, not user-configurable (no DB row).
 import type { NavIconKey } from "@/lib/nav-icons";
 
-export type BuildGroupLabel = "DATA" | "INTERFACE" | "MAINTAIN";
+export type BuildGroupLabel = "DATA" | "INTERFACE" | "MAINTAIN" | "SYSTEM";
 
 // A per-owner setting flag that, when false, hides an entry from the Build
 // sidebar. The taxonomy itself stays static (single source of truth); the
@@ -34,6 +35,9 @@ export type BuildEntry = {
   // the picker/palette/describe_workspace still know it) — only the sidebar
   // doorway is hidden while the feature is off.
   gatedBy?: BuildEntryFlag;
+  // Extra search words for the command palette, when what a person types isn't
+  // what the entry is called ("help" → User Guide). Sidebar ignores these.
+  keywords?: string[];
 };
 
 export type BuildGroup = {
@@ -52,6 +56,21 @@ export const BUILD_NAV: BuildGroup[] = [
       { label: "Templates", href: "/build/templates", icon: "document" },
       { label: "Workflows & Wikis", href: "/build/new", icon: "board" },
       { label: "Bespoke Tools", href: "/build/tools", icon: "bolt" },
+      // The storage browser (ADR-237): every uploaded file, its item, and
+      // whether the item still points at it. Data, not maintenance — files are
+      // content the owner owns, not a mess to clean (that's hygiene's sweep).
+      { label: "Files", href: "/build/files", icon: "folder" },
+      // Capture & Inbox (ADR-249): where each arrival path lands — queued in the
+      // Inbox, filed straight away, or dropped into a project — plus the web
+      // clipper setup, moved here from the bottom of User Settings so "how does
+      // stuff get into Ledgr" has one address. DATA, not MAINTAIN: capture
+      // routing shapes what data exists.
+      {
+        label: "Capture & Inbox",
+        href: "/build/capture",
+        icon: "inbox",
+        keywords: ["capture", "inbox", "clipper", "routing", "source", "email", "todoist"],
+      },
     ],
   },
   {
@@ -67,6 +86,17 @@ export const BUILD_NAV: BuildGroup[] = [
     entries: [
       // Model Overview is the /build home — the bird's-eye view you land on.
       { label: "Model Overview", href: "/build", icon: "compass" },
+      // User Guide (ADR-189): what Ledgr can do and where each feature lives.
+      // Sits next to Model Overview because the pair answers the two "what have
+      // I got" questions — that one for your data, this one for the tool. Also
+      // linked from the Work "More" menu and findable in the command palette,
+      // since the problem it solves is not knowing a feature exists at all.
+      {
+        label: "User Guide",
+        href: "/build/guide",
+        icon: "book",
+        keywords: ["help", "docs", "documentation", "manual", "how to"],
+      },
       { label: "Data Hygiene", href: "/build/hygiene", icon: "filter" },
       // Loose Ends (ADR-127 Phase 3): under-connected items + their top
       // suggested links — the relatedness engine inverted across the corpus.
@@ -76,6 +106,12 @@ export const BUILD_NAV: BuildGroup[] = [
       // (any MCP-speaking AI can connect), so the surface name stays generic
       // even though Claude is the reference client. Route slug stays /claude.
       { label: "AI & MCP", href: "/build/claude", icon: "bolt" },
+      // API Tokens (ADR-179): tokens for non-AI callers — an external app that
+      // pushes data in over /api/machine/*. Its own entry rather than a section
+      // on AI & MCP, because "give my app an API token" doesn't read as an AI
+      // task; the previous home (User Settings → Save from the web) was
+      // effectively undiscoverable for that.
+      { label: "API", href: "/build/api", icon: "tools" },
       // AI Memory (ADR-137): the durable memory an AI reads over MCP. Gated —
       // the sidebar shows it only when the owner has turned AI Memory on in
       // Settings; the page itself also gates, so it's discoverable-but-off until
@@ -87,6 +123,46 @@ export const BUILD_NAV: BuildGroup[] = [
       { label: "User Settings", href: "/settings", icon: "tools" },
     ],
   },
+  // SYSTEM = the software and the machine it runs on (updates, network,
+  // scheduled jobs, backups), split out of MAINTAIN 2026-09-12 because those
+  // four are about running Ledgr, not caring for the data in it.
+  {
+    label: "SYSTEM",
+    entries: [
+      // Updates: is this instance running the latest Ledgr, and has its database
+      // caught up with the code it's running? It earns a doorway of its own
+      // rather than a corner of the Changelog: the Changelog answers "what
+      // changed", this answers "am I behind", and only the second one has a
+      // button.
+      {
+        label: "Updates",
+        href: "/build/updates",
+        icon: "repeat",
+        keywords: ["update", "upgrade", "version", "migrate", "latest"],
+      },
+      // Network (ADR-209): the sync topology — hubs this instance syncs TO,
+      // devices that sync FROM it. Split out of Updates the moment a third
+      // node made two buried sections illegible.
+      {
+        label: "Network",
+        href: "/build/network",
+        icon: "affiliate",
+        keywords: ["sync", "hub", "spoke", "device", "peer", "topology", "replication"],
+      },
+      {
+        label: "Scheduled Jobs",
+        href: "/build/jobs",
+        icon: "repeat",
+        keywords: ["jobs", "cron", "schedule", "transcripts", "youtube", "export", "owner"],
+      },
+      {
+        label: "Backups",
+        href: "/build/backups",
+        icon: "download",
+        keywords: ["backup", "snapshot", "restore", "recovery"],
+      },
+    ],
+  },
 ];
 
 // Every Build entry as a flat list (group order preserved), for the destination
@@ -95,18 +171,20 @@ export const BUILD_ENTRIES: BuildEntry[] = BUILD_NAV.flatMap((g) => g.entries);
 
 // True for any route that renders within the Build surface (so NavShell shows
 // the Build sidebar). Model Overview is `/build` exactly; everything else is a
-// `/build/...` child. Dashboards (`/dashboards*`) are an INTERFACE-building
-// surface reached from the Build sidebar, so they keep the Build chrome too —
-// you manage/build a dashboard in Build. (A dashboard *assigned* as the Home or
-// Today surface renders at `/` or `/today`, which stay Work chrome — that's the
-// "using it" context, not the "building it" one.) `/settings` is reachable from
-// both sides, so it is NOT treated as Build chrome (it keeps the Work nav when
-// reached from the Work kebab); the sidebar's User Settings entry links to it.
+// `/build/...` child. The dashboards INDEX (`/dashboards`, the management
+// surface: rename/duplicate/delete/reorder + Home/Today assignment) is Build
+// chrome; an INDIVIDUAL dashboard (`/dashboards/<id>`) is the "using it"
+// context and keeps Work chrome — the destination picker offers dashboards as
+// Work-nav slots, and Home/Today already render the same grid under Work
+// chrome. (Claiming `/dashboards/...` as Build here is what once made Build
+// mode the only way to view an unassigned dashboard.) `/settings` is reachable
+// from both sides, so it is NOT treated as Build chrome (it keeps the Work nav
+// when reached from the Work kebab); the sidebar's User Settings entry links
+// to it.
 export function isBuildPath(pathname: string): boolean {
   return (
     pathname === "/build" ||
     pathname.startsWith("/build/") ||
-    pathname === "/dashboards" ||
-    pathname.startsWith("/dashboards/")
+    pathname === "/dashboards"
   );
 }

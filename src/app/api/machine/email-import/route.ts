@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
-import { verifyMachineToken } from "@/lib/auth/machine";
+import { verifyMachineRequest } from "@/lib/auth/credentials";
+import { standDownIfNotOwner } from "@/lib/job-owner-guard";
+import { stampJobRun } from "@/lib/job-owners-store";
 import { getGraphMailSource } from "@/lib/email/graph-source";
 import { runEmailImport } from "@/lib/email/sync";
 import { resolveMailboxOwner } from "@/lib/calendar/owner";
@@ -13,7 +15,7 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 export async function GET(request: Request) {
-  const identity = verifyMachineToken(request.headers.get("authorization"), "cron");
+  const identity = await verifyMachineRequest(request.headers.get("authorization"), "cron");
   if (!identity) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
 
   const log = createLogger("email-import");
@@ -29,6 +31,8 @@ export async function GET(request: Request) {
 
   try {
     const ownerId = await resolveMailboxOwner(upn);
+    const standDown = ownerId ? await standDownIfNotOwner("email-import", ownerId) : null;
+    if (standDown) return standDown;
     if (!ownerId) throw new Error(`no users row matches mailbox UPN ${upn}`);
     const msgErrors: { messageId: string; message: string }[] = [];
     const result = await runEmailImport(ownerId, source, {
@@ -42,6 +46,7 @@ export async function GET(request: Request) {
         detail: { msgErrors },
       });
     }
+    await stampJobRun(ownerId, "email-import");
     return NextResponse.json({ ok: true, correlationId: log.correlationId, ...result });
   } catch (err) {
     // 403 = Mail.ReadWrite not granted (§1c); 404 = the "Ledgr Import" folder

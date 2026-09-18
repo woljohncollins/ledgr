@@ -175,6 +175,40 @@ try {
   const staffRows = await getByEvent("evt-staff");
   check("trashed meeting not resurrected and not duplicated", staffRows.length === 1 && staffRows[0].deletedAt !== null);
 
+  // --- the HANDOFF (ADR-221) ----------------------------------------------
+  // The acceptance test for making this job claimable. A machine taking the job
+  // over has none of the state this one built up: no place in the queue (there
+  // is none to have, every run pulls the whole window fresh) and, the part that
+  // was actually worried about, an EMPTY `calendar_events` cache, because that
+  // table does not sync. Simulate exactly that and re-run: if dedup ever moved
+  // off the synced items.ms_event_id and onto the cache, this is the run that
+  // would quietly promote a second copy of every meeting.
+  await db.delete(jobState).where(eq(jobState.key, CALENDAR_JOB_KEY));
+  await db.delete(calendarEvents).where(eq(calendarEvents.ownerId, ownerId));
+  const liveBefore = await db
+    .select({ id: items.id })
+    .from(items)
+    .where(and(eq(items.ownerId, ownerId), isNotNull(items.msEventId)));
+  stub.events = [
+    ev({ id: "evt-roger", title: "Roger 1:1 (renamed again)", startUtc: new Date("2026-06-20T17:30:00Z"), lastModified: "2026-06-18T00:00:00Z", attendees: [{ name: UNIQUE_ATTENDEE, email: "roger@example.invalid" }] }),
+    ev({ id: "evt-staff", title: "Staff meeting MOVED", startUtc: new Date("2026-06-22T14:00:00Z"), lastModified: "2026-06-19T00:00:00Z" }),
+  ];
+  const handoff = await runCalendarSync(ownerId, stub, promoteAll);
+  check("a machine taking over creates no meeting it already has",
+    handoff.promoted === 0 && handoff.unchanged === 2, JSON.stringify(handoff));
+  const liveAfter = await db
+    .select({ id: items.id })
+    .from(items)
+    .where(and(eq(items.ownerId, ownerId), isNotNull(items.msEventId)));
+  check("no meeting record was duplicated by the handoff",
+    liveAfter.length === liveBefore.length, `${liveBefore.length} -> ${liveAfter.length}`);
+  const relinked = await db
+    .select({ msEventId: calendarEvents.msEventId, promotedItemId: calendarEvents.promotedItemId })
+    .from(calendarEvents)
+    .where(eq(calendarEvents.ownerId, ownerId));
+  check("the emptied list of meetings on offer refills and re-links itself",
+    relinked.length === 2 && relinked.every((r) => !!r.promotedItemId), JSON.stringify(relinked));
+
   // --- job state ----------------------------------------------------------
   const state = await getCalendarState();
   check("job_state records a clean run", !!state && state.lastSuccessAt !== null && state.lastResult.errors === 0, JSON.stringify(state?.lastResult));

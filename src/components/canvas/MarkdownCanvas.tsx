@@ -20,10 +20,14 @@ import FieldStrip, { type StripValues } from "@/components/canvas/FieldStrip";
 import ItemLayoutGrid from "@/components/canvas/ItemLayoutGrid";
 import CanvasSection from "@/components/canvas/CanvasSection";
 import CustomProperties from "@/components/build/CustomProperties";
+import ImageBox from "@/components/build/ImageBox";
+import { imageUrl, personImage } from "@/lib/person-image";
 import SaveOffline from "@/components/canvas/SaveOffline";
 import ShareLink from "@/components/canvas/ShareLink";
 import HistoryPanel from "@/components/canvas/HistoryPanel";
 import ItemUtilitiesFooter from "@/components/canvas/ItemUtilitiesFooter";
+import ItemFilesSection from "@/components/attachments/ItemFilesSection";
+import { listItemFilesWithRefs } from "@/lib/attachments";
 import { bodyMarkdown } from "@/lib/body";
 import MeetingPrep from "@/components/meetings/MeetingPrep";
 import MeetingNotes from "@/components/meetings/MeetingNotes";
@@ -158,6 +162,9 @@ export default async function MarkdownCanvas({ item, ownerId, arrange = false }:
 
   if (useGrid) {
     const propsObj = (item.properties as Record<string, unknown>) ?? {};
+    // The Files card's rows (ADR-237 addendum 3): fetched here because nodeFor
+    // is sync. The card itself stays live via the upload/remove window events.
+    const itemFiles = await listItemFilesWithRefs(ownerId, item.id).catch(() => []);
     // The read-only system footer (Type/Created/Updated + non-strip fields) as a
     // bare definition list — the card header already labels it "Details".
     const metaNode = (
@@ -208,6 +215,11 @@ export default async function MarkdownCanvas({ item, ownerId, arrange = false }:
         return <MeetingTranscripts ownerId={ownerId} itemId={item.id} bare />;
       if (id.startsWith("prop:")) {
         const key = id.slice(5);
+        // The person's built-in Image edits through the picture box (upload /
+        // URL / remove — ADR-202 addendum 4), not a bare url row.
+        if (item.type === "person" && key === "image") {
+          return <ImageBox itemId={item.id} propKey="image" initial={personImage(item.properties)} />;
+        }
         const def = propertySchema.find((p) => p.key === key);
         return def ? (
           <CustomProperties
@@ -236,6 +248,8 @@ export default async function MarkdownCanvas({ item, ownerId, arrange = false }:
           />
         ) : null;
       }
+      if (id === "files")
+        return <ItemFilesSection itemId={item.id} initial={itemFiles} bare />;
       if (id === "related") return <RelatedPanel ownerId={ownerId} itemId={item.id} bare />;
       if (id === "discover")
         return <DiscoverPanel itemId={item.id} anchorTitle={item.title} bare />;
@@ -279,6 +293,10 @@ export default async function MarkdownCanvas({ item, ownerId, arrange = false }:
 
   // Classic stacked canvas (null layout, not arranging) — unchanged.
   // ("Customize layout" now lives in the canvas "⋯" actions menu.)
+  const propsObj = (item.properties as Record<string, unknown>) ?? {};
+  // Image-kind properties (ADR-255) get their own box beside the person
+  // picture rather than a bare url row in Properties below.
+  const imageProps = propertySchema.filter((p) => p.kind === "image");
   return (
     <>
       <ItemEditor
@@ -294,6 +312,25 @@ export default async function MarkdownCanvas({ item, ownerId, arrange = false }:
         locked={locked}
         collapsibleToolbar
       />
+      {/* The person's picture (ADR-202 addendum 4): a square box — click to
+          upload (center-cropped square) or paste a URL. Feeds every avatar.
+          Any other image-kind property on the type (ADR-255) gets its own box
+          in the same row, right beside it. */}
+      {(item.type === "person" || imageProps.length > 0) && (
+        <div className="mx-auto flex w-full max-w-3xl flex-wrap gap-3 px-2 pt-2 sm:px-8 md:px-12">
+          {item.type === "person" && (
+            <ImageBox itemId={item.id} propKey="image" initial={personImage(item.properties)} />
+          )}
+          {imageProps.map((def) => (
+            <ImageBox
+              key={def.key}
+              itemId={item.id}
+              propKey={def.key}
+              initial={imageUrl(propsObj[def.key])}
+            />
+          ))}
+        </div>
+      )}
       {/* Block-anchor back-link (ADR-090): a promoted task points to the exact
           meeting line it came from; clicking deep-links + flashes that line. */}
       {sourceLink && (
@@ -338,8 +375,12 @@ export default async function MarkdownCanvas({ item, ownerId, arrange = false }:
             <CustomProperties
               itemId={item.id}
               typeKey={item.type}
-              schema={propertySchema}
-              initial={(item.properties as Record<string, unknown>) ?? {}}
+              // The person's Image and every image-kind property already have
+              // their own box above, so a repeat row here would double them up.
+              schema={propertySchema.filter(
+                (pr) => pr.kind !== "image" && !(item.type === "person" && pr.key === "image")
+              )}
+              initial={propsObj}
               locked={locked}
               hideHeading
               bare

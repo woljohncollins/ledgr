@@ -70,6 +70,52 @@ export async function syncPassageRefs(
     .onConflictDoNothing();
 }
 
+/**
+ * The same rule as syncPassageRefs, reconciled through an ARBITRARY executor
+ * and by replace rather than diff.
+ *
+ * Why it exists: the sync apply path (src/lib/sync/apply.ts) writes item rows
+ * directly, so it never goes through item-mutations.ts and therefore never
+ * called syncPassageRefs. Every synced body edit left the receiving peer's
+ * passage index frozen at whatever the fill copied — silently, and in both
+ * directions once a peer can push. passage_refs is NOT in ADR-206's v1 synced
+ * set and has no database trigger, so nothing else was going to fix it.
+ *
+ * It lives here, beside syncPassageRefs, deliberately: the rule for what refs
+ * a body implies (collectPassageRefsFromMarkdown) must have exactly one home,
+ * or the two reconcilers drift the first time the ref syntax changes.
+ *
+ * Replace instead of diff because the caller already knows the body changed,
+ * and a delete+insert through one executor is half the round trips of a diff.
+ * Row ids churn, which is safe: nothing persists a passage_refs id (the
+ * cascade runs from items, and resolvePassageRefs hands ids to the UI per
+ * render). Rows with any other role are untouched, same as syncPassageRefs.
+ *
+ * Takes the executor so the apply path can pass its transaction: the item
+ * write and its derived edges then commit together, leaving no window where a
+ * crash strands a body with stale refs.
+ */
+export async function replacePassageRefs(
+  exec: { execute(query: unknown): Promise<unknown> },
+  itemId: string,
+  body: unknown
+): Promise<void> {
+  await exec.execute(
+    sql`delete from passage_refs where source_item_id = ${itemId} and role = ${PASSAGE_ROLE}`
+  );
+  // collectPassageRefsFromMarkdown already dedupes on start-end, so a body
+  // citing one passage twice yields one edge here exactly as it does through
+  // syncPassageRefs.
+  const rows = collectPassageRefsFromMarkdown(bodyMarkdown(body));
+  if (rows.length === 0) return;
+  await exec.execute(
+    sql`insert into passage_refs (source_item_id, start_ref, end_ref, role) values ${sql.join(
+      rows.map((r) => sql`(${itemId}, ${r.startRef}, ${r.endRef}, ${PASSAGE_ROLE})`),
+      sql`, `
+    )} on conflict do nothing`
+  );
+}
+
 // The passage edges on one item, for the Related panel's passage group. Owner-
 // scoped through the join to items (as relations reads do) and template-excluded;
 // body-free. Deleted items never reach here (the row cascades on purge, and the

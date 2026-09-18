@@ -4,7 +4,8 @@
 // absolute URL from the returned token, so this stays env-agnostic.
 import { NextResponse } from "next/server";
 import { asUuid, errorResponse, requireOwner } from "@/lib/api";
-import { createShareToken, listShareTokens, revokeShareToken } from "@/lib/share";
+import { createShareToken, listShareTokens, revokeShareToken, type ShareOptions } from "@/lib/share";
+import { isTheme } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -35,9 +36,11 @@ export async function POST(
     const itemId = asUuid(id, "id");
     // Optional render options baked into the link. showIcons defaults on; the
     // client sends false to mint a link with @-mention icons turned off.
-    const body = (await req.json().catch(() => ({}))) as { showIcons?: unknown };
-    const options =
-      body.showIcons === false ? { showIcons: false } : {};
+    const body = (await req.json().catch(() => ({}))) as { showIcons?: unknown; theme?: unknown };
+    const options: ShareOptions = {
+      ...(body.showIcons === false ? { showIcons: false } : {}),
+      ...(isTheme(body.theme) ? { theme: body.theme } : {}),
+    };
     const row = await createShareToken(owner.id, itemId, options);
     return NextResponse.json({
       token: row.token,

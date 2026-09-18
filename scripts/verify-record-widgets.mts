@@ -1,5 +1,6 @@
-// PJ5 / ADR-111 verification: the milestone type (polymorphic, no done-state),
-// the Next Action pin + auto-advance, and the milestones fan-out. Live Neon.
+// PJ5 / ADR-111 (+ ADR-196 completable milestones) verification: the milestone
+// type (polymorphic, completable by checkbox / linked task / date), the Next
+// Action pin + auto-advance, and the milestones fan-out. Live Neon.
 // (The editable widget UIs + the /contain endpoint are exercised in-browser; the
 // verify covers the server contracts they ride.) Cleans up.
 // Run: npx tsx scripts/verify-record-widgets.mts
@@ -45,18 +46,69 @@ console.log("\n# milestone type");
   const mt = await getType("milestone");
   check("milestone is a system type", mt.isSystem === true);
   check("milestone is hidden + out of quick capture", mt.hidden === true && mt.showInQuickCapture === false);
-  check("milestone has no status affordance (status_mode none)", mt.statusMode === "none");
+  check("milestone is completable (status_mode checkbox, ADR-196)", mt.statusMode === "checkbox");
+  const keys = mt.propertySchema.map((p) => p.key);
+  check("milestone carries the 'task' relation field", keys.includes("task"));
+  check("milestone carries the 'points' number field", keys.includes("points"));
 }
 
-console.log("\n# milestone: polymorphic attach + no done-state");
+console.log("\n# milestone: polymorphic attach + completion (ADR-196)");
 {
   const note = await make("note", "PJ5 host note");
   const ms = await make("milestone", "Booklet to printer", { dueDate: new Date("2026-07-15T00:00:00.000Z") });
   await setHome(ownerId, ms.id, note.id, "contains");
   const parent = await homeParentOf(ownerId, ms.id);
   check("a milestone attaches to a NON-project type (polymorphic)", parent?.id === note.id);
-  check("a milestone has no done-state (stays not_started)", ms.statusCategory === "not_started");
+  check("a milestone starts open (not_started)", ms.statusCategory === "not_started");
   check("the milestone's date is its due_date", ms.dueDate?.toISOString() === "2026-07-15T00:00:00.000Z");
+
+  const { milestoneStates } = await import("../src/lib/milestones");
+  const { relateItems } = await import("../src/lib/relations");
+  const asRow = (m: { id: string; statusCategory: string; dueDate: Date | null; properties: unknown }) => m;
+
+  // 1. date fallback: dated + no task link + date passed => done via "date",
+  //    and the mode is date-driven (no checkbox affordance).
+  let states = await milestoneStates(ownerId, [asRow(ms)]);
+  check("a dated, un-linked milestone is date-mode", states.get(ms.id)?.mode === "date");
+  check("a passed date completes an un-linked milestone (via 'date')", states.get(ms.id)?.via === "date");
+  check("a date-mode completion dates itself at the due date", states.get(ms.id)?.completedAt?.getTime() === ms.dueDate?.getTime());
+
+  // 2. manual: an undated, un-linked milestone is checkbox-mode; checking it
+  //    off completes it AND stamps properties.completed_at (the Timeline places
+  //    it at that day); reopening clears the stamp.
+  const manual = await make("milestone", "PJ5 manual milestone");
+  states = await milestoneStates(ownerId, [asRow(manual)]);
+  check("an undated, un-linked milestone is manual-mode", states.get(manual.id)?.mode === "manual");
+  await toggleItemDone(ownerId, manual.id);
+  const manualFresh = await getItem(ownerId, manual.id);
+  const stamp = (manualFresh.properties as Record<string, unknown> | null)?.completed_at;
+  check("completing a milestone stamps properties.completed_at", typeof stamp === "string" && !Number.isNaN(new Date(stamp as string).getTime()));
+  states = await milestoneStates(ownerId, [asRow(manualFresh)]);
+  check("checking a milestone off completes it (via 'manual')", states.get(manual.id)?.via === "manual");
+  check("the state carries the completion date", states.get(manual.id)?.completedAt != null);
+  await toggleItemDone(ownerId, manual.id); // reopen
+  const manualReopened = await getItem(ownerId, manual.id);
+  check("reopening clears the stamp", (manualReopened.properties as Record<string, unknown> | null)?.completed_at === undefined);
+
+  // 3. task link: task-mode; an open linked task holds it open — even past its
+  //    date — and the task completing completes it.
+  const linked = await make("milestone", "PJ5 linked milestone", { dueDate: new Date("2026-07-15T00:00:00.000Z") });
+  const drive = await make("task", "PJ5 driving task");
+  await relateItems(ownerId, linked.id, drive.id, "task");
+  states = await milestoneStates(ownerId, [asRow(linked)]);
+  check("a task-linked milestone is task-mode (even with a date)", states.get(linked.id)?.mode === "task");
+  check("an open linked task holds a milestone open (date is a target, not a trigger)", states.get(linked.id)?.done === false);
+  await toggleItemDone(ownerId, drive.id);
+  states = await milestoneStates(ownerId, [asRow(linked)]);
+  check("completing the linked task completes the milestone (via 'task')", states.get(linked.id)?.via === "task");
+
+  // 4. points: an explicit percent becomes a share of the bar.
+  const { applyMilestoneShares, milestoneSharePct } = await import("../src/lib/project-progress");
+  check("points property reads as a share pct", milestoneSharePct({ points: 30 }) === 30);
+  const overlaid = applyMilestoneShares({ done: 0, total: 10, fraction: 0 }, [{ pct: 30, done: true }]);
+  check("a done 30% milestone puts the bar at 30% with nothing else done", Math.round((overlaid.fraction ?? 0) * 100) === 30);
+  const alone = applyMilestoneShares({ done: 0, total: 0, fraction: null }, [{ pct: 30, done: true }, { pct: 30, done: false }]);
+  check("shares alone rescale to the whole bar", Math.round((alone.fraction ?? 0) * 100) === 50);
 }
 
 console.log("\n# Next Action pin + auto-advance");
@@ -69,6 +121,13 @@ console.log("\n# Next Action pin + auto-advance");
   await updateItem(ownerId, project.id, { nextActionTaskId: t1.id });
 
   await toggleItemDone(ownerId, t1.id); // complete the pinned task
+  // The completion stamp widened to tasks (ADR-197) — the project markdown
+  // document reports when each task finished.
+  const t1Fresh = await getItem(ownerId, t1.id);
+  check(
+    "completing a task stamps properties.completed_at (ADR-197)",
+    typeof (t1Fresh.properties as Record<string, unknown> | null)?.completed_at === "string"
+  );
   let p = await getItem(ownerId, project.id);
   check("completing the pinned task auto-advances to the next open task", p.nextActionTaskId === t2.id, String(p.nextActionTaskId));
 

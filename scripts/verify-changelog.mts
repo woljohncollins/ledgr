@@ -64,7 +64,9 @@ check("non-base64 content passes through", decodeContent({ content: "raw", encod
 // ── getGithubConfig ───────────────────────────────────────────────────────────
 const saved = { ...process.env };
 delete process.env.GITHUB_TOKEN;
-check("no token → null (not configured)", getGithubConfig() === null);
+// Reads need no token (a public repo answers anonymously), so the config is
+// always there; only the token is null, which is what gates writes.
+check("no token → a config with a null token (reads still work, writes refuse)", getGithubConfig()?.token === null);
 
 process.env.GITHUB_TOKEN = "ghp_test";
 delete process.env.GITHUB_REPO;

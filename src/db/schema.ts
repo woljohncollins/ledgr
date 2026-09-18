@@ -11,7 +11,9 @@
 import { sql, type SQL } from "drizzle-orm";
 import {
   bigint,
+  bigserial,
   boolean,
+  check,
   customType,
   index,
   integer,
@@ -194,6 +196,15 @@ export const types = pgTable("types", {
   // capturable; the builder toggles it so a "data only" custom type can stay
   // out of the curated dropdown.
   showInQuickCapture: boolean("show_in_quick_capture").notNull().default(true),
+  // Whether this type's items get a Listen (read-aloud) control on the canvas.
+  // Default false — opt-in per type from Build → Types. Off = MarkdownCanvas
+  // never mounts ListenBar for this type's items.
+  listenEnabled: boolean("listen_enabled").notNull().default(false),
+  // Nested under listenEnabled (only meaningful when it's on): when true, the
+  // Listen button redirects to Microsoft Edge (better free voices) instead of
+  // playing locally via speechSynthesis, unless already in Edge or on a
+  // platform with no redirect (iOS). Default false.
+  listenOpenInEdge: boolean("listen_open_in_edge").notNull().default(false),
   // Hidden from everyday surfaces (ADR-059): a hidden type still exists and its
   // items still work, but it drops out of quick capture, the +New menus, the
   // list tabs, and the nav destination options. Lets the user turn off built-in
@@ -367,6 +378,25 @@ export const items = pgTable(
       .where(sql`${t.inbox} and ${t.deletedAt} is null`),
     index("items_properties_gin").using("gin", t.properties),
     index("items_search_gin").using("gin", t.search),
+    // The list-read indexes (ADR-215, the perf pass). Every list surface used
+    // to seq-scan-and-sort ALL of an owner's live rows (3,015 heap pages per
+    // render on real data) because nothing indexed updated_at. Both are
+    // partial on exactly the live-list predicate every such query carries, so
+    // they also serve count(*) badges as index-only scans; both order
+    // `desc nulls last` because that is the ORDER BY the query layer emits
+    // (listOrderExpr) — a plain `desc` index (nulls first) would NOT match it,
+    // and the column being NOT NULL does not make the planner forgive the
+    // difference (measured: it didn't).
+    index("items_live_updated_idx")
+      .on(t.ownerId, sql`${t.updatedAt} desc nulls last`)
+      .where(sql`${t.deletedAt} is null and ${t.isTemplate} = false`),
+    index("items_live_type_updated_idx")
+      .on(t.ownerId, t.type, sql`${t.updatedAt} desc nulls last`)
+      .where(sql`${t.deletedAt} is null and ${t.isTemplate} = false`),
+    // Trigram GIN on title: the picker/typeahead ILIKE '%word%' filter
+    // (listItemsQuery), which ran per keystroke as a full scan. pg_trgm is
+    // installed since 0004 (similarity() already leans on it).
+    index("items_title_trgm_idx").using("gin", sql`${t.title} gin_trgm_ops`),
   ]
 );
 
@@ -893,6 +923,154 @@ export const activeContext = pgTable(
   (t) => [uniqueIndex("active_context_owner_uq").on(t.ownerId)]
 );
 
+// ── Sync spine (local hub/spoke, phase 1) ───────────────────────────────────
+// The op-based sync engine (plans/local-hub-idea-to-cutover.html). Every
+// instance gets these tables via the shared migration; an instance with no
+// LEDGR_SYNC_HUBS set (the cloud hub, Tyler's) just accrues an oplog and never
+// runs the loop. Machinery, not user content (rule 2): none of this is
+// owner-authored, so none of it is in `items`.
+
+// This instance's device identity: exactly one row, self-assigned by the
+// migration's seed (INSERT ... WHERE NOT EXISTS), so every instance — prod
+// Neon, local peers, Tyler's — gets a stable uuid the moment it migrates.
+export const syncDevice = pgTable("sync_device", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: text("name"),
+});
+
+// ── The roster: one row per copy of Ledgr the owner runs (ADR-220) ──────────
+//
+// WHY THIS TABLE EXISTS. Two id spaces never met: an install knows its own
+// `sync_device.id`, while a hub's list of OTHER installs (`sync_peers`) is keyed
+// by a uuid the hub minted at add-device time and never reconciled with it. So
+// no install could name another one, which made "run the backup over there" and
+// "which of my copies is behind?" both unanswerable from anywhere but the hub.
+//
+// The fix is the smallest thing that reconciles them: every install writes ONE
+// row, keyed by its OWN id, into a table that syncs. The key is what makes it
+// safe — two installs never write the same row, so the field-level
+// last-writer-wins merge has nothing to fight over. A roster kept inside
+// `users.settings` would have been cheaper (no migration) and wrong: settings is
+// a single jsonb column, so it is ONE field to the merge, and two installs
+// announcing themselves would clobber each other's entries wholesale.
+//
+// DELIBERATELY NOT `sync_peers`. That table is access control: tokens, revoked,
+// pull-only, retention. This one is identity. A copy can exist in the roster
+// without connecting to this particular node, and merging the two would tangle
+// "who may connect to me" with "what copies exist".
+export const installs = pgTable(
+  "installs",
+  {
+    // The install's own sync_device.id. Never a hub-minted id.
+    id: uuid("id").primaryKey(),
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => users.id),
+    // What the owner calls this machine. Set once when the copy is set up and
+    // owner-editable thereafter, from any device. A periodic announce must
+    // NEVER overwrite it, or a rename would silently revert.
+    label: text("label").notNull(),
+    // "cloud" | "local". The install knows which it is; nobody else can tell.
+    kind: text("kind").notNull().default("local"),
+    // The build this copy is running, so "the laptop is behind" is visible
+    // without opening the laptop.
+    appVersion: text("app_version"),
+    // Written by the install itself, so it means "this copy was RUNNING then",
+    // not "it reached me then" — the stronger fact, and the one that makes a
+    // job silently not running visible from every device.
+    lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (t) => [index("installs_owner_idx").on(t.ownerId)]
+);
+
+// The wire format's schema-version stamp, read by the oplog trigger. One row,
+// holding the migration tag as of the last SYNC-TOUCHING migration (seeded
+// '0054_sync_spine'; any future migration that changes a synced table's shape
+// must UPDATE it). Chosen over recreating the trigger function per migration:
+// a one-row UPDATE is harder to forget and impossible to get subtly wrong.
+// The /api/machine/sync version GATE compares full journal tags instead (see
+// src/lib/sync/version.ts); this stamp is provenance on each op row.
+export const syncSchemaVer = pgTable("sync_schema_ver", {
+  ver: text("ver").primaryKey(),
+});
+
+// The oplog: one row per write to a synced table, appended by row-level AFTER
+// triggers (hand-written SQL in migration 0054 — drizzle-kit doesn't emit
+// triggers). `changed` is the full row for insert/delete and only the changed
+// fields (key -> new value) for update, diffed in the trigger via to_jsonb;
+// the generated `search` column is stripped. `origin_device_id` is stamped
+// (via the ledgr.sync_origin GUC) when the apply layer runs in a transaction,
+// marking the op as an echo of a foreign write so push excludes it; when the
+// driver can't (neon-http), echoes terminate after one round because apply
+// only writes values that actually differ and the triggers' IS DISTINCT FROM
+// guards log nothing for no-op writes.
+export const syncOps = pgTable(
+  "sync_ops",
+  {
+    seq: bigserial("seq", { mode: "number" }).primaryKey(),
+    deviceId: uuid("device_id").notNull(),
+    // The device this write is an echo OF (null = an original local write).
+    originDeviceId: uuid("origin_device_id"),
+    ownerId: uuid("owner_id").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull().defaultNow(),
+    tbl: text("tbl").notNull(),
+    // For `types` (text pk) this is md5('types:' || key)::uuid — deterministic
+    // across instances; the real key travels in `changed`.
+    rowId: uuid("row_id").notNull(),
+    kind: text("kind").notNull(),
+    changed: jsonb("changed").notNull(),
+    schemaVer: text("schema_ver").notNull(),
+  },
+  (t) => [
+    // seq is the pk (cursor scans); this one serves the apply layer's
+    // per-row field-stamp lookups.
+    index("sync_ops_tbl_row_idx").on(t.tbl, t.rowId),
+    check("sync_ops_kind_check", sql`${t.kind} in ('insert', 'update', 'delete')`),
+  ]
+);
+
+// The hub's device registry AND the cursor store: one row per peer device
+// that may sync against this instance. Token auth mirrors machine.ts (sha256
+// hash stored, timingSafeEqual compare) but lives in the DB — deliberately,
+// per the plan's decision 15 — so revoking a device is a row flip on the hub,
+// not an env edit + redeploy.
+export const syncPeers = pgTable("sync_peers", {
+  deviceId: uuid("device_id").primaryKey(),
+  name: text("name").notNull(),
+  tokenHash: text("token_hash").notNull(),
+  revoked: boolean("revoked").notNull().default(false),
+  // Guardrail 1 (belt and suspenders): when true, /api/machine/sync REJECTS
+  // any non-empty ops array from this device with a 403, regardless of what
+  // the spoke sends. Flippable from the hub's Synced-devices UI, so a
+  // mistake is correctable even if the spoke itself is misconfigured.
+  pullOnly: boolean("pull_only").notNull().default(false),
+  lastSeenAt: timestamp("last_seen_at", { withTimezone: true }),
+  // RETENTION, not access (ADR-213). pruneSyncOps keeps every op above
+  // min(last_pulled_seq) across non-revoked peers, so a peer that is merely
+  // ASLEEP used to pin the hub's oplog forever — unbounded, with whole body
+  // text in every row — while revoking, the only way to free the floor, is
+  // also what destroys the peer's ability to resume. This is the third
+  // option:
+  //   "auto" — holds while seen inside its window, then lapses. The default,
+  //            so the oplog is bounded with nobody having to remember.
+  //   "warm" — holds indefinitely by explicit choice, for a device the owner
+  //            knows is coming back (~25MB/month of unprunable oplog at
+  //            measured rates, which is why the UI says so).
+  //   "cold" — never holds; returning needs a full re-fill.
+  // Access stays governed by `revoked` and `pullOnly`; these axes are
+  // deliberately separate, which is the whole point.
+  holdMode: text("hold_mode").notNull().default("auto"),
+  // Per-device window for "auto", null = the system default. The device-side
+  // mirror of ADR-210's per-hub cadence.
+  graceDays: integer("grace_days"),
+  // Cursors: the highest of the peer's own seqs it has pushed here, and the
+  // highest local seq it has pulled — what the Synced-devices UI reads as lag.
+  lastPushedSeq: bigint("last_pushed_seq", { mode: "number" }).notNull().default(0),
+  lastPulledSeq: bigint("last_pulled_seq", { mode: "number" }).notNull().default(0),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
 // No silent failures: failed crons/webhooks land here and surface through
 // /health and the UI. detail is shown only when debug mode is on.
 export const errorLog = pgTable("error_log", {
@@ -905,3 +1083,48 @@ export const errorLog = pgTable("error_log", {
     .notNull()
     .defaultNow(),
 });
+
+// Minted API credentials (ADR-224). The DB-backed half of machine auth: a
+// two-part credential (public key id + hashed secret) the owner creates from
+// User Settings and hands to an app or an AI assistant. Same sha256 hash +
+// timingSafeEqual compare as the env tokens in src/lib/auth/machine.ts, but
+// the hash lives on a row — so issuing and revoking are inserts and row
+// flips, not an env edit + redeploy (the sync_peers precedent, plan decision
+// 15). The env path (LEDGR_API_TOKENS) keeps working alongside this.
+//
+// key_id is PUBLIC and stored in plaintext: it identifies the credential, and
+// it is the single indexed lookup that replaces walking every entry. Only the
+// SECRET is hashed, so a leaked table yields no usable credential.
+export const apiCredentials = pgTable(
+  "api_credentials",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // Multi-user-ready, not multi-user (Principle 7): the row records who
+    // minted it, and the Settings list is owner-scoped. The machine routes
+    // still act for the single resolveMachineOwner; a multi-user build would
+    // read the acting owner off this column instead.
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => users.id),
+    name: text("name").notNull(),
+    keyId: text("key_id").notNull(),
+    secretHash: text("secret_hash").notNull(),
+    // The scope strings this credential carries ("api", "mcp", "cron", …),
+    // the same vocabulary the env entries use. jsonb rather than a text[] to
+    // keep the column types in this schema to the set already in use.
+    scopes: jsonb("scopes").$type<string[]>().notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    // Advanced on successful auth, throttled and off the request path, so the
+    // list can answer "is this one still in use?" before revoking it.
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    // Revocation is this timestamp, not a delete: the row stays so the list
+    // still shows what the credential was and when it stopped working.
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("api_credentials_key_id_uq").on(t.keyId),
+    index("api_credentials_owner_idx").on(t.ownerId),
+  ]
+);

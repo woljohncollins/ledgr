@@ -18,10 +18,23 @@ import type { Composition, RecordWidget } from "@/lib/composition";
 // Widgets rendered in the header strip (not cards) — kept out of the reorder.
 const HEADER_WIDGETS = new Set(["status", "people", "progress"]);
 
-// `countLimit` present → this card previews a collection and gets the hover
-// "show N" gear (its current per-card limit). Undefined → no gear (Overview,
-// derived single-value cards).
-export type SectionItem = { instanceId: string; title: string; body: ReactNode; countLimit?: number };
+// Every card gets the hover options gear (Rename lives there, 2026-08-19).
+// `countLimit` present → this card previews a collection, so the gear also
+// offers "show N" (its current per-card limit). Undefined → no count section
+// (Overview, derived single-value cards).
+export type SectionItem = {
+  instanceId: string;
+  // The display title: the per-record rename when set, else defaultTitle.
+  title: string;
+  defaultTitle: string;
+  customTitle: string | null;
+  body: ReactNode;
+  countLimit?: number;
+  // Tasks card only (2026-08-17): the gear also offers "Group by" with these
+  // choices, writing options.groupBy through the same composition PATCH.
+  groupChoices?: string[];
+  groupCurrent?: string;
+};
 
 export default function SectionGrid({
   itemId,
@@ -134,15 +147,21 @@ export default function SectionGrid({
               <h3 className="min-w-0 flex-1 truncate text-xs font-medium uppercase tracking-wide text-neutral-500">
                 {it.title}
               </h3>
-              {it.countLimit !== undefined && (
-                <SectionCountGear
-                  itemId={itemId}
-                  composition={composition}
-                  instanceId={id}
-                  current={it.countLimit}
-                  label={it.title}
-                />
-              )}
+              <SectionCountGear
+                // key: a rename PATCHes + refreshes, and the gear's title
+                // draft seeds from customTitle — remount on change so a
+                // reverted/saved value never shows a stale draft.
+                key={`gear:${it.customTitle ?? ""}`}
+                itemId={itemId}
+                composition={composition}
+                instanceId={id}
+                current={it.countLimit}
+                label={it.title}
+                defaultTitle={it.defaultTitle}
+                customTitle={it.customTitle}
+                groupChoices={it.groupChoices}
+                groupCurrent={it.groupCurrent}
+              />
               <RemoveSection itemId={itemId} composition={composition} instanceId={id} label={it.title} />
             </div>
             {it.body}

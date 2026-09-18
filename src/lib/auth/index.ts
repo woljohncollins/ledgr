@@ -1,4 +1,5 @@
 import { clerkAuthProvider } from "./clerk";
+import { chooseFromProcessEnv, localAuthProvider } from "./local";
 import type { AuthProvider } from "./types";
 
 // Everyone-is-signed-out provider for keyless runs (fresh clone, CI build).
@@ -21,13 +22,20 @@ const devAuthProvider = (email: string): AuthProvider => ({
   },
 });
 
-// The one place the active provider is chosen. A Phase 4 local build swaps
-// this assignment; nothing else in the app changes.
-export const authProvider: AuthProvider = process.env
-  .NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
-  ? clerkAuthProvider
-  : process.env.NODE_ENV === "development" && process.env.DEV_USER_EMAIL
-    ? devAuthProvider(process.env.DEV_USER_EMAIL)
-    : nullAuthProvider;
+// The one place the active provider is chosen. The selection RULE is the pure
+// chooseAuthProvider in ./local.ts (verified by verify-supervisor.mts); this
+// just maps the choice onto the four implementations. localAuthProvider is
+// the LH2 hub/spoke local mode (ADR-206 decision 5): production-allowed on a
+// non-Vercel machine, while a deployed env missing its Clerk key still fails
+// closed to nullAuthProvider (ADR-184).
+const choice = chooseFromProcessEnv();
+export const authProvider: AuthProvider =
+  choice === "clerk"
+    ? clerkAuthProvider
+    : choice === "local"
+      ? localAuthProvider(process.env.LEDGR_LOCAL_OWNER_EMAIL as string)
+      : choice === "dev"
+        ? devAuthProvider(process.env.DEV_USER_EMAIL as string)
+        : nullAuthProvider;
 
 export type { AuthProvider, AuthUser } from "./types";

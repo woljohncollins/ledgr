@@ -10,11 +10,12 @@
 // (the canvas-dispatch path), so a `song` resolves its `chord` canvas before any
 // page renders one.
 import { allModules, registerModule, type ModuleManifest } from "@/lib/modules";
+import { fileModule } from "@/lib/modules/files";
 import { mindmapModule } from "@/lib/modules/mindmap";
 import { paperModule } from "@/lib/modules/papers";
 import { songModule } from "@/lib/modules/songs";
 
-const WORKFLOW_MODULES: ModuleManifest[] = [songModule, paperModule, mindmapModule];
+const WORKFLOW_MODULES: ModuleManifest[] = [songModule, paperModule, mindmapModule, fileModule];
 
 for (const m of WORKFLOW_MODULES) {
   if (!allModules().some((existing) => existing.id === m.id)) {

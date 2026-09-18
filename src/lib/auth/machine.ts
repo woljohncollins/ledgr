@@ -39,13 +39,16 @@ function parseEntries(raw: string | undefined): TokenEntry[] {
   return entries;
 }
 
-function hashToken(token: string): string {
+// Exported for the sync-peer device tokens (src/lib/sync/auth.ts), which
+// reuse this exact hash + compare but store the hash in sync_peers rather
+// than env (plan decision 15: revocation is a row flip, not a redeploy).
+export function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
 }
 
 // Constant-time compare over hex digests; length is always 64 so the
 // timingSafeEqual length precondition holds.
-function digestsMatch(a: string, b: string): boolean {
+export function digestsMatch(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   return timingSafeEqual(Buffer.from(a, "hex"), Buffer.from(b, "hex"));
 }

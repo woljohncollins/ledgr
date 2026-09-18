@@ -8,6 +8,7 @@ import { getItem } from "@/lib/items";
 import { isItemFavorited } from "@/lib/favorites";
 import { canvasIdForType } from "@/lib/modules";
 import { resolveOwner } from "@/lib/owner";
+import { DEFAULT_SETTINGS, getSettings, type ItemOpenMode } from "@/lib/settings";
 import { getType } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -32,10 +33,16 @@ export default async function ItemModal({
   let isTemplate = false;
   let locked = false;
   let favorited = false;
+  // Where this owner wants an item to open (left/right dock, center popup, or the
+  // measured default). Resolved server-side and handed to the client Modal, which
+  // still narrows it by what the layout allows — a phone is always the sheet, and
+  // a docked nav rail wins the edge it's on.
+  let itemOpenMode: ItemOpenMode = DEFAULT_SETTINGS.itemOpenMode;
   try {
     const owner = await resolveOwner();
     if (owner) {
       const item = await getItem(owner.id, id);
+      itemOpenMode = (await getSettings(owner.id)).itemOpenMode;
       // Resolve through the capability too (SPIKE), so a user type borrowing the
       // chord chart widens the modal like a real song.
       const typeDef = await getType(item.type).catch(() => null);
@@ -64,6 +71,7 @@ export default async function ItemModal({
       isTemplate={isTemplate}
       locked={locked}
       favorited={favorited}
+      openMode={itemOpenMode}
     >
       <ItemCanvas id={id} variant="modal" />
     </Modal>

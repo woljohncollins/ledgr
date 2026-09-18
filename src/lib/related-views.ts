@@ -9,6 +9,7 @@
 import type { ViewItem } from "@/components/views/ViewRenderer";
 import { ItemError } from "@/lib/items";
 import { resolveLensSort, type Lens } from "@/lib/list-lenses";
+import { orderedStatuses, resolveStatusSchema } from "@/lib/status";
 import { getType } from "@/lib/types";
 import type { ViewLensData } from "@/lib/view-render";
 import {
@@ -56,14 +57,24 @@ function toViewItem(i: Awaited<ReturnType<typeof queryViewItems>>[number]): View
 // from the group's type — the same metadata view-render.ts computes.
 async function groupingFor(typeKey: string, view: ViewDefinition) {
   const type = await getType(typeKey).catch(() => null);
+  const statuses = resolveStatusSchema(type?.statusSchema ?? null);
   let groupOrder: string[] | undefined;
   const g = view.grouping;
   if (g && "propertyKey" in g) {
     groupOrder = type?.propertySchema.find((p) => p.key === g.propertyKey)?.options;
+  } else if (!g || ("field" in g && g.field === "status")) {
+    // Status boards order + label their columns from the type's schema (see the
+    // same branch in view-render.ts). Third of the three call sites.
+    // Category order, not the raw authored order (see view-render.ts).
+    groupOrder = orderedStatuses(statuses).map((s) => s.key);
   }
   const propertyLabels: Record<string, string> = {};
-  for (const p of type?.propertySchema ?? []) propertyLabels[p.key] = p.label;
-  return { groupOrder, propertyLabels };
+  const propertyKinds: Record<string, string> = {};
+  for (const p of type?.propertySchema ?? []) {
+    propertyLabels[p.key] = p.label;
+    propertyKinds[p.key] = p.kind;
+  }
+  return { groupOrder, propertyLabels, propertyKinds, statuses };
 }
 
 // --- Provided-rows path (rule-pulled groups) ------------------------------
@@ -159,6 +170,7 @@ export async function resolveProvidedGroup(
     count: items.length,
     groupOrder: grouping.groupOrder,
     propertyLabels: grouping.propertyLabels,
+    propertyKinds: grouping.propertyKinds,
   };
 }
 
@@ -205,6 +217,7 @@ export async function resolveRelatedGroup(
       count: hideCompleted ? visible.length : count,
       groupOrder: grouping.groupOrder,
       propertyLabels: grouping.propertyLabels,
+      propertyKinds: grouping.propertyKinds,
     };
   }
 
@@ -244,5 +257,6 @@ export async function resolveRelatedGroup(
     count: hideCompleted ? visible.length : count,
     groupOrder: grouping.groupOrder,
     propertyLabels: grouping.propertyLabels,
+    propertyKinds: grouping.propertyKinds,
   };
 }

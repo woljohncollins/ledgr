@@ -5,14 +5,13 @@
 // stays "User Settings" everywhere (never bare "Settings").
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
-import { hasScopedToken } from "@/lib/auth/machine";
-import { clipperConfigured } from "@/lib/auth/oauth";
+import { API_SCOPES, listCredentials } from "@/lib/auth/credentials";
 import { resolveOwner } from "@/lib/owner";
 import { getSettings } from "@/lib/settings";
 import { DEFAULT_TIMEZONE } from "@/lib/today";
 import SettingsForm from "@/components/settings/SettingsForm";
+import ApiCredentials from "@/components/settings/ApiCredentials";
 import IcsFeed from "@/components/settings/IcsFeed";
-import WebClipper from "@/components/settings/WebClipper";
 import BackButton from "@/components/ui/BackButton";
 
 export const dynamic = "force-dynamic";
@@ -30,8 +29,7 @@ export default async function SettingsPage() {
   const proto =
     h.get("x-forwarded-proto") ?? (host.startsWith("localhost") ? "http" : "https");
   const origin = host ? `${proto}://${host}` : (process.env.NEXT_PUBLIC_APP_URL ?? "");
-  const hasApiToken = hasScopedToken("api");
-  const canMintClipper = clipperConfigured();
+  const credentials = await listCredentials(owner.id);
 
   return (
     <main className="min-h-screen">
@@ -42,10 +40,10 @@ export default async function SettingsPage() {
         </div>
         <SettingsForm initial={settings} serverDefaultTz={DEFAULT_TIMEZONE} />
         <IcsFeed initialToken={settings.icsToken} />
-        <WebClipper
+        <ApiCredentials
+          initial={credentials}
+          scopes={API_SCOPES}
           origin={origin}
-          hasApiToken={hasApiToken}
-          canMint={canMintClipper}
         />
       </div>
     </main>

@@ -1,11 +1,14 @@
-// S4 verification (ADR-084): natural-language quick-add — parsing date +
-// recurrence + urgency out of a task TITLE (parseTaskTitle in nl-date.ts). Pure
-// only (no DB): the parser is deterministic given a reference "today". Run:
-//   npx tsx scripts/verify-nl-task.mts
-import { readFileSync } from "node:fs";
-for (const line of readFileSync(".env.local", "utf8").replace(/^﻿/, "").split(/\r?\n/)) {
-  const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
-  if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, "");
+import { existsSync, readFileSync } from "node:fs";
+
+// .env.local is gitignored, so it is present locally and ABSENT in CI. A bare
+// readFileSync here used to throw ENOENT, which is why this script passed on a
+// developer machine and failed on CI's first run. The load is optional — the
+// checks below assert whichever branch the env puts them in.
+if (existsSync(".env.local")) {
+  for (const line of readFileSync(".env.local", "utf8").replace(/^\uFEFF/, "").split(/\r?\n/)) {
+    const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, "");
+  }
 }
 
 const { parseTaskTitle } = await import("../src/lib/nl-date");

@@ -5,6 +5,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import NavSlotsEditor from "@/components/build/NavSlotsEditor";
+import SearchModeEditor from "@/components/build/SearchModeEditor";
 import { listDashboards } from "@/lib/dashboards";
 import { buildDestOptions } from "@/lib/nav-slot-options";
 import { resolveOwner } from "@/lib/owner";
@@ -43,6 +44,10 @@ export default async function NavigationBuilder() {
           Configure the middle nav slots — the destinations between Home and New/More. Point
           one at a dashboard, view, type list, built-in page, or a tools group.
         </p>
+
+        <section className="mt-8">
+          <SearchModeEditor initial={settings.searchMode} />
+        </section>
 
         <section className="mt-8">
           <NavSlotsEditor

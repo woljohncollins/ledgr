@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Set Up Your Ledgr</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --paper: #F5F7F4;
+    --paper-raised: #FDFEFC;
+    --ink: #1D2621;
+    --ink-muted: #55645B;
+    --line: #D9E0DA;
+    --green: #2F6B4F;
+    --green-soft: #E4EEE7;
+    --brass: #9A6B24;
+    --brass-soft: #F3EAD9;
+    --mono-bg: #1D2621;
+    --mono-ink: #DCE7DE;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper: #141A16;
+      --paper-raised: #1C2420;
+      --ink: #E6ECE6;
+      --ink-muted: #9DACA1;
+      --line: #2C3830;
+      --green: #74B592;
+      --green-soft: #213028;
+      --brass: #D2A05C;
+      --brass-soft: #33291A;
+      --mono-bg: #0E1310;
+      --mono-ink: #CFDCD1;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper: #141A16;
+    --paper-raised: #1C2420;
+    --ink: #E6ECE6;
+    --ink-muted: #9DACA1;
+    --line: #2C3830;
+    --green: #74B592;
+    --green-soft: #213028;
+    --brass: #D2A05C;
+    --brass-soft: #33291A;
+    --mono-bg: #0E1310;
+    --mono-ink: #CFDCD1;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font: 400 17px/1.65 "Source Sans 3", "Segoe UI", system-ui, sans-serif;
+  }
+  main { max-width: 680px; margin: 0 auto; padding: 56px 24px 96px; }
+  h1, h2 {
+    font-family: Fraunces, Georgia, serif;
+    font-weight: 600;
+    line-height: 1.15;
+    text-wrap: balance;
+    margin: 0;
+  }
+  h1 { font-size: clamp(2.1rem, 6vw, 3rem); }
+  h2 { font-size: 1.35rem; margin-bottom: 10px; }
+  p { margin: 0 0 1em; }
+  a { color: var(--green); }
+  .eyebrow {
+    font-size: .78rem; font-weight: 600; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--green); margin-bottom: 14px;
+  }
+  .lede { font-size: 1.15rem; color: var(--ink-muted); margin-top: 18px; }
+  .facts {
+    display: flex; flex-wrap: wrap; gap: 10px 28px;
+    margin: 26px 0 0; padding: 16px 0;
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    font-size: .95rem; color: var(--ink-muted);
+  }
+  .facts strong { color: var(--ink); font-weight: 600; }
+  .rhythm {
+    margin: 30px 0 0; padding: 18px 22px;
+    background: var(--paper-raised); border: 1px solid var(--line); border-radius: 10px;
+    font-size: .98rem;
+  }
+  .rhythm strong { color: var(--green); }
+
+  .step { display: flex; gap: 20px; margin-top: 44px; }
+  .step-num {
+    flex: 0 0 44px; height: 44px; border-radius: 50%;
+    border: 1.5px solid var(--line); background: var(--paper-raised);
+    display: grid; place-items: center;
+    font-family: Fraunces, Georgia, serif; font-size: 1.25rem; font-weight: 600;
+  }
+  .step-body { min-width: 0; flex: 1; padding-top: 6px; }
+  .who {
+    display: inline-block; font-size: .72rem; font-weight: 600;
+    letter-spacing: .1em; text-transform: uppercase;
+    padding: 3px 10px; border-radius: 999px; margin-bottom: 8px;
+  }
+  .who-you { background: var(--brass-soft); color: var(--brass); }
+  .who-claude { background: var(--green-soft); color: var(--green); }
+
+  .card {
+    background: var(--paper-raised); border: 1px solid var(--line);
+    border-radius: 10px; padding: 20px 22px; margin: 14px 0;
+  }
+  .field { margin-bottom: 14px; }
+  .field label {
+    display: block; font-size: .85rem; font-weight: 600;
+    margin-bottom: 4px; color: var(--ink);
+  }
+  .field .hint { font-size: .82rem; color: var(--ink-muted); margin-top: 4px; }
+  .field input, .field select {
+    width: 100%; padding: 10px 12px; font: inherit;
+    color: var(--ink); background: var(--paper);
+    border: 1px solid var(--line); border-radius: 8px;
+  }
+  .field input:focus-visible, .field select:focus-visible,
+  button:focus-visible, a:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--green); outline-offset: 2px;
+  }
+  .copy-btn {
+    font: 600 1rem "Source Sans 3", system-ui, sans-serif;
+    color: var(--paper-raised); background: var(--green);
+    border: 0; border-radius: 8px; padding: 12px 20px; cursor: pointer;
+  }
+  .copy-btn:hover { filter: brightness(1.08); }
+  pre.prompt {
+    background: var(--mono-bg); color: var(--mono-ink);
+    font: 400 .85rem/1.55 "IBM Plex Mono", ui-monospace, monospace;
+    border-radius: 10px; padding: 16px 18px; margin: 14px 0 0;
+    white-space: pre-wrap; word-break: break-word; overflow-x: auto;
+  }
+  .cmd { display: flex; align-items: stretch; gap: 8px; margin: 8px 0; }
+  .cmd pre {
+    flex: 1; min-width: 0; margin: 0;
+    background: var(--mono-bg); color: var(--mono-ink);
+    font: 400 .82rem/1.55 "IBM Plex Mono", ui-monospace, monospace;
+    border-radius: 8px; padding: 10px 14px;
+    white-space: pre-wrap; word-break: break-word; overflow-x: auto;
+  }
+  .mini-copy {
+    flex: 0 0 auto; align-self: center;
+    font: 600 .82rem "Source Sans 3", system-ui, sans-serif;
+    color: var(--green); background: var(--green-soft);
+    border: 0; border-radius: 8px; padding: 8px 12px; cursor: pointer;
+  }
+  .mini-copy:hover { filter: brightness(1.05); }
+  .cmd-what { font-size: .88rem; color: var(--ink-muted); margin: 0 0 2px; }
+  .os-label {
+    font-size: .8rem; font-weight: 600; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--ink-muted); margin: 18px 0 6px;
+  }
+  .card .os-label:first-child { margin-top: 0; }
+  .then { font-size: .95rem; color: var(--ink-muted); margin-top: 10px; }
+  .then strong { color: var(--ink); }
+  .note {
+    border-left: 3px solid var(--brass); background: var(--brass-soft);
+    border-radius: 0 8px 8px 0; padding: 12px 16px; margin: 14px 0;
+    font-size: .95rem;
+  }
+  details {
+    margin: 14px 0; border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 16px; background: var(--paper-raised); font-size: .95rem;
+  }
+  summary { cursor: pointer; font-weight: 600; }
+  .faq { margin-top: 64px; border-top: 1px solid var(--line); padding-top: 36px; }
+  .faq h2 { margin-bottom: 20px; }
+  .faq dt { font-weight: 600; margin-top: 18px; }
+  .faq dd { margin: 4px 0 0; color: var(--ink-muted); }
+  footer {
+    margin-top: 64px; padding-top: 20px; border-top: 1px solid var(--line);
+    font-size: .88rem; color: var(--ink-muted);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .copy-btn, .mini-copy { transition: filter .15s ease; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">A guide from Tyler</div>
+    <h1>Set Up Your Ledgr</h1>
+    <p class="lede">Ledgr is a personal system for your meetings, tasks, notes, and projects — your own private copy, running on your own free accounts. You don't need to be technical: Claude does the work, and you sign in to a few websites when it asks.</p>
+    <div class="facts">
+      <span><strong>Time:</strong> 30–45 minutes</span>
+      <span><strong>Cost:</strong> $0 — everything runs on free plans</span>
+      <span><strong>You need:</strong> your own computer, your email, and Claude Code</span>
+    </div>
+    <div class="rhythm">Most of this guide is the same little dance, once per account: <strong>you create the account</strong> → <strong>you give Claude permission to use it</strong> (a browser window pops up; you click Allow) → <strong>Claude does everything else on that account for you</strong>. Four accounts, four dances, then Claude builds your Ledgr.</div>
+    <details>
+      <summary>Don't have Claude Code yet?</summary>
+      <p style="margin-top:10px">Claude Code is the assistant that does the technical work. Ask Tyler to help you install it, or paste one of these into a command window and sign in with a free Claude account when it asks:</p>
+      <div class="cmd-what">Mac (Terminal):</div>
+      <div class="cmd"><pre>curl -fsSL https://claude.ai/install.sh | bash</pre><button class="mini-copy" type="button" data-copy>Copy</button></div>
+      <div class="cmd-what">Windows (PowerShell):</div>
+      <div class="cmd"><pre>irm https://claude.ai/install.ps1 | iex</pre><button class="mini-copy" type="button" data-copy>Copy</button></div>
+    </details>
+  </header>
+
+  <section class="step">
+    <div class="step-num">1</div>
+    <div class="step-body">
+      <span class="who who-you">You do this</span>
+      <h2>Install Node — the installer for everything else</h2>
+      <p>Node is the tool Claude uses to install and run all the other tools, so it goes in first. Copy the command for your computer, paste it into your command window, and press Enter.</p>
+      <div class="card">
+        <div class="os-label">On a Mac — open Terminal (press ⌘ Space, type “Terminal”, press Enter)</div>
+        <p class="cmd-what">This downloads the official Node installer and opens it — click through it:</p>
+        <div class="cmd"><pre>curl -o ~/Downloads/node.pkg https://nodejs.org/dist/v24.19.0/node-v24.19.0.pkg &amp;&amp; open ~/Downloads/node.pkg</pre><button class="mini-copy" type="button" data-copy>Copy</button></div>
+        <div class="os-label">On Windows — open PowerShell (press Start, type “PowerShell”, press Enter)</div>
+        <div class="cmd"><pre>winget install OpenJS.NodeJS.LTS</pre><button class="mini-copy" type="button" data-copy>Copy</button></div>
+      </div>
+      <p class="then"><strong>Then:</strong> close the command window, open a fresh one, type <strong>claude</strong>, and press Enter. Everything from here on is pasted to Claude in that window.</p>
+      <div class="note"><strong>Important:</strong> use your own computer. The setup signs into <em>your</em> accounts, so a borrowed or shared computer will tangle things up.</div>
+    </div>
+  </section>
+
+  <section class="step">
+    <div class="step-num">2</div>
+    <div class="step-body">
+      <span class="who who-you">You + Claude</span>
+      <h2>GitHub — where your copy of Ledgr lives</h2>
+      <p>Paste this to Claude. It opens the GitHub sign-up page and waits while you create your account. Then Claude installs GitHub's tool, you grant it permission, and Claude makes your own copy of the Ledgr code for you.</p>
+      <div class="cmd"><pre>I'm setting up my own Ledgr (step 2 of Tyler's guide: GitHub). First, open https://github.com/signup in my browser and wait while I create a GitHub account — if I say I already have one, skip ahead. Then install GitHub's command-line tool (gh) and connect my account: run gh auth login --web, show me the short code, and wait while I enter it in the browser and click Authorize. Once connected, make my copy of the Ledgr code for me: run gh repo fork strategicli/ledgr --clone=false, then confirm the fork exists and tell me my GitHub username.</pre><button class="mini-copy" type="button" data-copy>Copy</button></div>
+      <p class="then"><strong>What you'll see:</strong> the sign-up page, then Claude shows you a short code (like <strong>ABCD-1234</strong>) — a GitHub page opens, you type the code in and click <strong>Authorize</strong>. Claude handles the rest.</p>
+    </div>
+  </section>
+
+  <section class="step">
+    <div class="step-num">3</div>
+    <div class="step-body">
+      <span class="who who-you">You + Claude</span>
+      <h2>Vercel — runs the app on the internet</h2>
+      <p>Paste this to Claude. It installs Vercel's tool and pops open the connection page.</p>
+      <div class="cmd"><pre>Next account for my Ledgr setup (step 3: Vercel). Install Vercel's command-line tool and connect my account: run npx -y vercel@latest login and wait — a browser window will open and I'll sign up by clicking "Continue with GitHub" and allow the connection. When it finishes, confirm I'm connected by running npx -y vercel@latest whoami.</pre><button class="mini-copy" type="button" data-copy>Copy</button></div>
+      <p class="then"><strong>What you'll see:</strong> a Vercel page — click <strong>Continue with GitHub</strong> (no new password to remember), then <strong>Allow</strong>/<strong>Authorize</strong>.</p>
+    </div>
+  </section>
+
+  <section class="step">
+    <div class="step-num">4</div>
+    <div class="step-body">
+      <span class="who who-you">You + Claude</span>
+      <h2>Neon — the database where your items live</h2>
+      <div class="cmd"><pre>Next account for my Ledgr setup (step 4: Neon). Install Neon's command-line tool and connect my account: run npx -y neonctl@latest auth and wait — a browser window will open and I'll sign up (I'll use "Continue with GitHub") and click Allow. When it finishes, confirm I'm connected by running npx -y neonctl@latest me.</pre><button class="mini-copy" type="button" data-copy>Copy</button></div>
+      <p class="then"><strong>What you'll see:</strong> a Neon page — <strong>Continue with GitHub</strong>, then <strong>Allow</strong>.</p>
+    </div>
+  </section>
+
+  <section class="step">
+    <div class="step-num">5</div>
+    <div class="step-body">
+      <span class="who who-you">You + Claude</span>
+      <h2>Clerk — handles your sign-in securely</h2>
+      <div class="cmd"><pre>Last account for my Ledgr setup (step 5: Clerk). Install Clerk's command-line tool and connect my account: run npx -y clerk@latest auth login and wait — a browser window will open and I'll create my Clerk account and click Allow. When it finishes, confirm I'm connected by running npx -y clerk@latest whoami.</pre><button class="mini-copy" type="button" data-copy>Copy</button></div>
+      <p class="then"><strong>What you'll see:</strong> a Clerk page — sign up, then <strong>Allow</strong>. That's the last account. All four are now connected.</p>
+    </div>
+  </section>
+
+  <section class="step">
+    <div class="step-num">6</div>
+    <div class="step-body">
+      <span class="who who-claude">Claude does the work</span>
+      <h2>Build your Ledgr</h2>
+      <p>Answer the three questions below, press the copy button, and paste the result to Claude. This is the big one — Claude sets up the database, connects the pieces, and puts your Ledgr on the internet. It takes 10–15 minutes and narrates as it goes; near the end it asks you to approve one more GitHub connection in the browser.</p>
+      <div class="card">
+        <div class="field">
+          <label for="email">The email address you'll sign in to Ledgr with</label>
+          <input id="email" type="email" autocomplete="email" placeholder="you@example.com">
+          <div class="hint">Double-check the spelling — this exact address becomes the key to your Ledgr.</div>
+        </div>
+        <div class="field">
+          <label for="fname">Your first name</label>
+          <input id="fname" type="text" autocomplete="given-name" placeholder="michelle">
+          <div class="hint">Used to name your copy, like <em>michelle-ledgr</em>.</div>
+        </div>
+        <div class="field">
+          <label for="tz">Your timezone</label>
+          <select id="tz">
+            <option value="America/Chicago" selected>Central (Illinois)</option>
+            <option value="America/New_York">Eastern</option>
+            <option value="America/Denver">Mountain</option>
+            <option value="America/Phoenix">Arizona</option>
+            <option value="America/Los_Angeles">Pacific</option>
+          </select>
+        </div>
+        <button class="copy-btn" id="copy" type="button">Copy my build instructions</button>
+        <pre class="prompt" id="preview" aria-live="polite"></pre>
+      </div>
+    </div>
+  </section>
+
+  <section class="step">
+    <div class="step-num">7</div>
+    <div class="step-body">
+      <span class="who who-you">You do this</span>
+      <h2>Sign in to your new Ledgr</h2>
+      <p>When Claude says the setup is verified, it gives you your address — something like <strong>yourname&#8209;ledgr.vercel.app</strong>. Open it, sign up using <em>exactly</em> the email address from step 6, and you're in. Bookmark it; on your phone you can add it to your home screen like an app.</p>
+    </div>
+  </section>
+
+  <section class="step">
+    <div class="step-num">8</div>
+    <div class="step-body">
+      <span class="who who-you">You do this — later, whenever</span>
+      <h2>Getting updates</h2>
+      <p>Ledgr keeps improving, and your copy was set up to take updates safely. When you want the latest: inside Ledgr, go to <strong>Build → Updates</strong> and press the button if one is offered. That's the whole thing — no terminal, no Claude. If an update ever has a problem, your current version simply stays running.</p>
+      <p>Claude also ends the setup with a short summary block — keep a screenshot of it somewhere safe, and share it with Tyler if he asks (he can help if anything ever needs fixing).</p>
+    </div>
+  </section>
+
+  <section class="faq">
+    <h2>If something looks wrong</h2>
+    <dl>
+      <dt>A browser window didn't pop up</dt>
+      <dd>Tell Claude. It can print the link instead — copy it into your browser yourself and carry on.</dd>
+      <dt>“Signed in, but not recognized”</dt>
+      <dd>The email you signed in with isn't the one from step 6. Tell Claude: “I signed in with a different email address, fix the owner email to ___” and it will.</dd>
+      <dt>A step failed or Claude seems stuck</dt>
+      <dd>Just tell Claude what you see on the screen. It can read error messages and try again. Nothing in this setup is fragile — steps can be safely re-run.</dd>
+      <dt>Uploading a photo or file doesn't work</dt>
+      <dd>That's expected for now — file storage is an optional extra that isn't part of the basic setup. Ask Tyler if you want it added.</dd>
+    </dl>
+  </section>
+
+  <footer>
+    Ledgr is built by Brandon &amp; Tyler Collins. Your copy is entirely yours — your accounts, your data, nobody else can see it.
+  </footer>
+</main>
+<script>
+  const tmpl = (email, name, tz) =>
+`Time to build my Ledgr (step 6 of Tyler's guide). All four accounts — GitHub, Vercel, Neon, Clerk — are already created and connected from the earlier steps, and my fork of the code exists.
+
+Fetch https://raw.githubusercontent.com/strategicli/ledgr/main/docs/satellite-setup.md and follow that procedure one step at a time. Verify each account connection instead of redoing the logins, and get my GitHub username from the gh tool.
+
+My sign-in email is: ${email}
+My first name is: ${name}
+My timezone is: ${tz}
+
+I'm not technical. Explain each step in plain language, tell me clearly whenever I need to do something in a browser window, and wait for me to finish before moving on.`;
+  const $ = (id) => document.getElementById(id);
+  document.querySelectorAll("[data-copy]").forEach((b) => {
+    b.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(b.previousElementSibling.textContent.trim());
+        b.textContent = "Copied";
+      } catch { b.textContent = "Select & copy manually"; }
+      setTimeout(() => { b.textContent = "Copy"; }, 2000);
+    });
+  });
+  const btn = $("copy");
+  btn.addEventListener("click", async () => {
+    const email = $("email").value.trim();
+    const name = $("fname").value.trim().toLowerCase();
+    if (!email || !email.includes("@")) { $("email").focus(); btn.textContent = "Enter your email first"; return; }
+    if (!name) { $("fname").focus(); btn.textContent = "Enter your first name"; return; }
+    const text = tmpl(email, name, $("tz").value);
+    $("preview").textContent = text;
+    try {
+      await navigator.clipboard.writeText(text);
+      btn.textContent = "Copied — now paste it into Claude";
+    } catch {
+      btn.textContent = "Couldn't auto-copy — select the text below and copy it";
+    }
+  });
+</script>
+</body>
+</html>

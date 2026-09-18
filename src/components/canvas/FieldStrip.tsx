@@ -4,7 +4,9 @@
 // failure reverts to the server truth and says so.
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { uploadAttachment } from "@/components/attachments/upload";
+import { showToast } from "@/components/ui/ActionToast";
 import type { CanvasField } from "@/lib/canvas-fields";
 import { ITEM_STATUSES, URGENCIES } from "@/lib/item-enums";
 import { priorityStyle, type Priority } from "@/lib/priority";
@@ -36,7 +38,7 @@ function toLocalInput(iso: string): string {
 // panel surface, brighter on focus/hover — the calm chip strip under the title.
 const selectClass =
   "rounded-md border border-line bg-surface-1 px-2 py-0.5 text-sm text-ink outline-none focus:border-line-strong";
-const inputClass = `${selectClass} [color-scheme:dark]`;
+const inputClass = selectClass;
 // Reschedule shortcut chips on the scheduled field (T2).
 const chipClass =
   "rounded-full border border-line px-2 py-0.5 text-xs text-ink-muted hover:border-line-strong hover:text-ink";
@@ -81,6 +83,11 @@ export default function FieldStrip({
 }) {
   const [values, setValues] = useState(initial);
   const [error, setError] = useState(false);
+  // The URL field's upload path (Tyler, 2026-08-29): a link can point at your
+  // own storage — pick or drop a file and its stable /files/<id> address
+  // becomes this URL. One affordance, no second concept beside the File type.
+  const urlFileRef = useRef<HTMLInputElement>(null);
+  const [uploadingUrl, setUploadingUrl] = useState(false);
 
   // One field per request is fine here: strip edits are single deliberate
   // clicks, not keystroke streams like the body autosave.
@@ -101,6 +108,18 @@ export default function FieldStrip({
       setValues(before);
       setError(true);
       endSave(false);
+    }
+  }
+
+  async function uploadAsUrl(file: File) {
+    setUploadingUrl(true);
+    try {
+      const up = await uploadAttachment(itemId, file);
+      await save({ url: up.fileUrl });
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploadingUrl(false);
     }
   }
 
@@ -246,20 +265,56 @@ export default function FieldStrip({
         );
       case "url":
         return (
-          <input
-            type="url"
-            className={`${inputClass} w-56`}
-            placeholder="https://"
-            defaultValue={values.url ?? ""}
-            // Free-text fields commit on blur/Enter, not per keystroke.
-            onBlur={(e) => {
-              const v = e.target.value.trim() || null;
-              if (v !== values.url) void save({ url: v });
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") e.currentTarget.blur();
-            }}
-          />
+          <span className="inline-flex items-center gap-1">
+            <input
+              type="url"
+              // Keyed on the saved value so an upload (or any external save)
+              // refreshes this otherwise-uncontrolled input's display.
+              key={values.url ?? ""}
+              className={`${inputClass} w-56`}
+              placeholder="https:// (or drop a file)"
+              defaultValue={values.url ?? ""}
+              // Free-text fields commit on blur/Enter, not per keystroke.
+              onBlur={(e) => {
+                const v = e.target.value.trim() || null;
+                if (v !== values.url) void save({ url: v });
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+              }}
+              // Drop a file straight onto the field: it uploads and its stable
+              // address becomes the URL.
+              onDragOver={(e) => e.preventDefault()}
+              onDrop={(e) => {
+                const file = e.dataTransfer?.files?.[0];
+                if (!file) return;
+                e.preventDefault();
+                void uploadAsUrl(file);
+              }}
+            />
+            <button
+              type="button"
+              disabled={uploadingUrl}
+              title="Upload a file — its address becomes this URL"
+              aria-label="Upload a file as this link's URL"
+              onClick={() => urlFileRef.current?.click()}
+              className="rounded-md border border-line bg-surface-1 p-1 text-ink-subtle hover:border-line-strong hover:text-ink disabled:opacity-50"
+            >
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M20.5 11.5l-8 8a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.5-7.5" />
+              </svg>
+            </button>
+            <input
+              ref={urlFileRef}
+              type="file"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                e.target.value = "";
+                if (file) void uploadAsUrl(file);
+              }}
+            />
+          </span>
         );
     }
   }

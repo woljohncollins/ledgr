@@ -104,6 +104,30 @@ try {
   const isEmpty = await byWhere("and", [{ subject: "property", key: "note", op: "empty" }]);
   check("property empty = missing/blank", has(isEmpty, s2) && !has(isEmpty, tAlpha));
 
+  // Real-shaped values: the editor stores numbers as JSON numbers and dates as
+  // full ISO timestamps; the rule inputs send "5" and "2026-06-01".
+  const n5 = await mkTask("real number 5", { qty: 5 });
+  const n7 = await mkTask("real number 7", { qty: 7 });
+  const numEq = await byWhere("and", [{ subject: "property", key: "qty", op: "eq", value: "5", numeric: true }]);
+  check("number is = matches a stored JSON number", has(numEq, n5) && !has(numEq, n7));
+  const numNeq = await byWhere("and", [{ subject: "property", key: "qty", op: "neq", value: "5", numeric: true }]);
+  check("number is not = excludes only that number", !has(numNeq, n5) && has(numNeq, n7) && has(numNeq, s2));
+  const d1 = await mkTask("iso june 1", { at: "2026-06-01T00:00:00.000Z" });
+  const d2 = await mkTask("iso june 2", { at: "2026-06-02T00:00:00.000Z" });
+  const dEq = await byWhere("and", [{ subject: "property", key: "at", op: "eq", value: "2026-06-01" }]);
+  check("date is on = matches the stored day", has(dEq, d1) && !has(dEq, d2));
+  const dLte = await byWhere("and", [{ subject: "property", key: "at", op: "lte", value: "2026-06-01" }]);
+  check("date on or before includes that day", has(dLte, d1) && !has(dLte, d2));
+  const dGt = await byWhere("and", [{ subject: "property", key: "at", op: "gt", value: "2026-06-01" }]);
+  check("date is after excludes that day", !has(dGt, d1) && has(dGt, d2));
+
+  const cOn = await mkTask("flag on", { flag: true });
+  const cOff = await mkTask("flag off", { flag: false });
+  const checked = await byWhere("and", [{ subject: "property", key: "flag", op: "checked" }]);
+  check("checkbox checked = json true only", has(checked, cOn) && !has(checked, cOff) && !has(checked, s2));
+  const unchecked = await byWhere("and", [{ subject: "property", key: "flag", op: "unchecked" }]);
+  check("checkbox unchecked = false or absent", has(unchecked, cOff) && has(unchecked, s2) && !has(unchecked, cOn));
+
   console.log("\n# AND vs OR combinator");
   const orRes = await byWhere("or", [
     { subject: "property", key: "note", op: "contains", value: "world" },

@@ -37,7 +37,7 @@ export type BodyEditorProps = {
   itemId: string;
   initialMarkdown: string;
   onChange: (markdown: string) => void;
-  uploadImage: (file: File) => Promise<string>;
+  uploadFile: (file: File) => Promise<string>;
   onRequestSave?: () => Promise<void>;
   promoteToMeetingId?: string;
   promotedRefs?: PromotedRefs;
@@ -47,6 +47,12 @@ export type BodyEditorProps = {
   // The type uses canvas tabs (notes, opt-in types). Honored only in rich mode
   // and only for normal-size bodies; a large body is edited as one flat document.
   tabsEnabled?: boolean;
+  // Papers only: keep `[^id]` footnote markers out of the serializer's escaping
+  // so a citation survives a save (FootnoteMarkdownFix, extensions.ts). Opt-in,
+  // because footnotes are not in the shared dialect and an ordinary note must
+  // keep `\[^…\]` as literal typed text. Forwarded to both rich branches; the
+  // source branch is a plain textarea and never escapes anything.
+  preserveFootnotes?: boolean;
   // Desk panels (ADR-147 D5): the active canvas-section is controlled by the
   // panel chrome and TabbedBody's own strip is hidden. Forwarded to TabbedBody.
   controlledSection?: number;
@@ -148,7 +154,7 @@ export default function BodyEditor({
   itemId,
   initialMarkdown,
   onChange,
-  uploadImage,
+  uploadFile,
   onRequestSave,
   promoteToMeetingId,
   promotedRefs,
@@ -156,6 +162,7 @@ export default function BodyEditor({
   compact = false,
   editable = true,
   tabsEnabled = false,
+  preserveFootnotes = false,
   controlledSection,
   focusSignal,
   follower = false,
@@ -293,7 +300,7 @@ export default function BodyEditor({
         key="rich-tabbed"
         itemId={itemId}
         initialMarkdown={mountText}
-        uploadImage={uploadImage}
+        uploadFile={uploadFile}
         onChange={handleChange}
         promoteToMeetingId={promoteToMeetingId}
         promotedRefs={promotedRefs}
@@ -306,6 +313,7 @@ export default function BodyEditor({
         viewControls={viewControls}
         onTabsPresence={setHasTabs}
         addTabRef={addTabRef}
+        preserveFootnotes={preserveFootnotes}
       />
     );
   } else {
@@ -314,7 +322,7 @@ export default function BodyEditor({
         key="rich"
         itemId={itemId}
         initialMarkdown={mountText}
-        uploadImage={uploadImage}
+        uploadFile={uploadFile}
         onChange={handleChange}
         promoteToMeetingId={promoteToMeetingId}
         promotedRefs={promotedRefs}
@@ -324,6 +332,7 @@ export default function BodyEditor({
         onRequestSave={onRequestSave}
         editable={editable}
         focusSignal={focusSignal}
+        preserveFootnotes={preserveFootnotes}
       />
     );
   }

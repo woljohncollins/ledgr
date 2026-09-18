@@ -405,7 +405,7 @@ export default function SearchClient({
               value={from}
               onChange={(e) => setFrom(e.target.value)}
               aria-label="Updated from"
-              className={`${selectClass} [color-scheme:dark]`}
+              className={selectClass}
             />
             –
             <input
@@ -413,7 +413,7 @@ export default function SearchClient({
               value={to}
               onChange={(e) => setTo(e.target.value)}
               aria-label="Updated to"
-              className={`${selectClass} [color-scheme:dark]`}
+              className={selectClass}
             />
           </label>
         )}

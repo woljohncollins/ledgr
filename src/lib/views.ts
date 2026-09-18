@@ -3,15 +3,26 @@
 // columns store exactly these shapes, so today's hardcoded list pages become
 // stored system views later without a query rewrite. Same discipline as
 // every list read: owner-scoped, body-free listColumns, live items only.
-import { and, asc, desc, eq, inArray, isNull, lt, gte, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, gte, ne, sql, type SQL } from "drizzle-orm";
+import { unionAll } from "drizzle-orm/pg-core";
 import { getDb } from "@/db";
-import { items, views } from "@/db/schema";
+import { items, relations, views } from "@/db/schema";
 import { type ItemStatus, type Urgency } from "@/lib/item-enums";
 import { toPriority } from "@/lib/priority";
 import { ItemError, listColumns } from "@/lib/items";
 import { appTimezoneSync, todayBounds, zonedMidnightUtc } from "@/lib/today";
-import { parseWhere, type WhereCondition, type WhereGroup } from "@/lib/view-where";
+import {
+  parseWhere,
+  resolveRelativeValue,
+  type WhereCondition,
+  type WhereGroup,
+} from "@/lib/view-where";
 import { BUILTIN_DATES, type DateRef, type BuiltinDate } from "@/lib/placement";
+import {
+  DEFAULT_PROJECT_CARD,
+  parseProjectCardConfig,
+  type ProjectCardConfig,
+} from "@/lib/project-card-config";
 
 // Date windows. "overdue" is strictly before today (for a meeting, "in the
 // past"); "today" is the single day; "week" is today through six days out;
@@ -285,13 +296,31 @@ function joinBool(parts: (SQL | null)[], connector: "and" | "or"): SQL | null {
 // top-level jsonb containment (index-friendly, and matches a multi_select array
 // element or a scalar select alike); comparisons cast to numeric when hinted,
 // else compare as text (ISO dates sort lexically, ADR-008).
-function propertyConditionSql(key: string, c: WhereCondition): SQL | null {
+function propertyConditionSql(key: string, raw: WhereCondition): SQL | null {
+  // Relative value tokens (view-where.ts) resolve here, at query time, in the
+  // owner's timezone — so "days is @dayofmonth" is a rotation that never needs
+  // editing. Resolution happens BEFORE anything reads the value, because the
+  // numeric cast and the YYYY-MM-DD sniff below both branch on its shape.
+  const today = todayBounds(new Date(), appTimezoneSync()).today;
+  const c: WhereCondition = {
+    ...raw,
+    value: resolveRelativeValue(raw.value, today),
+    values: raw.values?.map((v) => resolveRelativeValue(v, today) ?? v),
+  };
   const text = sql`(${items.properties} ->> ${key})`;
   const present = sql`(${items.properties} -> ${key} is not null and ${items.properties} ->> ${key} <> '')`;
   const absent = sql`(${items.properties} -> ${key} is null or ${items.properties} ->> ${key} = '')`;
   // "value present as scalar OR as an array element" — the equality/membership atom.
   const has = (v: string) =>
     sql`(${items.properties} @> ${JSON.stringify({ [key]: v })}::jsonb or ${items.properties} @> ${JSON.stringify({ [key]: [v] })}::jsonb)`;
+  // A date rule's value is a bare YYYY-MM-DD from <input type="date">, while a
+  // date property stores a full ISO timestamp ("2026-06-01T00:00:00.000Z"), so
+  // comparing raw text got the day itself wrong ("on or before June 1" excluded
+  // June 1, "is on" never matched). Compare the stored value's day instead.
+  // ponytail: shape-sniffing the value stands in for a kind hint the condition
+  // doesn't carry; add `date: true` next to `numeric` if a text property ever
+  // needs to compare a YYYY-MM-DD literal verbatim.
+  const dayLiteral = !c.numeric && /^\d{4}-\d{2}-\d{2}$/.test(c.value ?? "");
   const cmp = (op: SQL) => {
     if (c.value == null) return null;
     if (c.numeric) {
@@ -299,19 +328,34 @@ function propertyConditionSql(key: string, c: WhereCondition): SQL | null {
       if (!Number.isFinite(n)) return null;
       return sql`(case when ${text} ~ ${NUMERIC_RE} then (${text})::numeric end) ${op} ${n}`;
     }
+    if (dayLiteral) return sql`left(${text}, 10) ${op} ${c.value}`;
     return sql`${text} ${op} ${c.value}`;
   };
+  // A number property stores a JSON number, so jsonb containment against the
+  // rule's string value ({"score":"5"} vs {"score":5}) never matched; compare
+  // numerically. Same day-vs-timestamp mismatch for dates.
+  const eqExact = (v: string) =>
+    c.numeric || dayLiteral ? cmp(sql`=`) : has(v);
   switch (c.op) {
     case "set":
       return present;
     case "empty":
       return absent;
+    // A checkbox stores JSON true; anything else (false, absent, "") is unchecked.
+    case "checked":
+      return sql`${items.properties} @> ${JSON.stringify({ [key]: true })}::jsonb`;
+    case "unchecked":
+      return sql`not (${items.properties} @> ${JSON.stringify({ [key]: true })}::jsonb)`;
     case "contains":
       return c.value != null ? sql`${text} ilike ${`%${c.value}%`}` : null;
     case "eq":
-      return c.value != null ? has(c.value) : null;
-    case "neq":
-      return c.value != null ? sql`not ${has(c.value)}` : null;
+      return c.value != null ? eqExact(c.value) : null;
+    case "neq": {
+      if (c.value == null) return null;
+      const e = eqExact(c.value);
+      // A missing value is "not X" too, so include null rows.
+      return e ? sql`(${e} is not true)` : null;
+    }
     case "gt":
       return cmp(sql`>`);
     case "lt":
@@ -433,12 +477,13 @@ const NUMERIC_RE = "^-?[0-9]+(\\.[0-9]+)?$";
 // relation count (the relatedTo EXISTS subquery's count sibling, served by
 // relations_source_idx / relations_target_idx); "property" orders by
 // items.properties->>key with an optional numeric cast.
-function listOrderExpr(sort: ListSort): SQL {
+function listOrderExpr(sort: Exclude<ListSort, { field: "mostLinked" }>): SQL {
   const asc = sort.dir === "asc";
-  if (sort.field === "mostLinked") {
-    const cnt = sql`(select count(*) from relations r where r.match_state = 'confirmed' and (r.source_id = ${items.id} or r.target_id = ${items.id}))`;
-    return asc ? sql`${cnt} asc` : sql`${cnt} desc`;
-  }
+  // "mostLinked" is handled structurally in viewItemsQuery (the aggregate
+  // join), never here: a correlated per-row count(*) probes the relations
+  // indexes once per candidate item, O(every matching row) on any backend.
+  // Measured on the prod spoke (23k items / 19k relations): 122,194 buffers,
+  // 186ms — 7× the whole shared_buffers cache, so it evicted itself every run.
   if (sort.field === "property") {
     const val = sql`(${items.properties} ->> ${sort.propertyKey})`;
     const expr = sort.numeric
@@ -462,14 +507,59 @@ export function viewItemsQuery(
   limit = VIEW_LIMIT
 ) {
   const where = viewWhere(ownerId, filter);
+  const db = getDb();
+  const capped = Math.min(Math.max(limit, 1), VIEW_MAX);
+
+  // "Most linked" aggregates the relations table ONCE and joins the counts,
+  // instead of running a correlated count(*) per candidate row. Same counts:
+  // each confirmed edge contributes to both endpoints, a self-edge to its item
+  // exactly once (the ne() guard on the second half — the correlated version
+  // counted it once too). Measured on the prod spoke: 122,194 → 3,448 buffers,
+  // 186ms → 37ms for the all-types list (perf-audit.mts reproduces this).
+  if (sort.field === "mostLinked") {
+    const halves = unionAll(
+      db
+        .select({ otherId: relations.sourceId })
+        .from(relations)
+        .where(eq(relations.matchState, "confirmed")),
+      db
+        .select({ otherId: relations.targetId })
+        .from(relations)
+        .where(
+          and(
+            eq(relations.matchState, "confirmed"),
+            ne(relations.targetId, relations.sourceId)
+          )
+        )
+    ).as("linked");
+    const rc = db
+      .select({
+        otherId: halves.otherId,
+        linkCount: sql<number>`count(*)`.as("link_count"),
+      })
+      .from(halves)
+      .groupBy(halves.otherId)
+      .as("rc");
+    const cnt = sql`coalesce(${rc.linkCount}, 0)`;
+    return db
+      .select(listColumns)
+      .from(items)
+      .leftJoin(rc, eq(rc.otherId, items.id))
+      .where(and(...where))
+      .orderBy(
+        sort.dir === "asc" ? sql`${cnt} asc` : sql`${cnt} desc`,
+        sql`${items.updatedAt} desc`
+      )
+      .limit(capped);
+  }
 
   // updated_at breaks ties so the order is stable across renders.
-  return getDb()
+  return db
     .select(listColumns)
     .from(items)
     .where(and(...where))
     .orderBy(listOrderExpr(sort), sql`${items.updatedAt} desc`)
-    .limit(Math.min(Math.max(limit, 1), VIEW_MAX));
+    .limit(capped);
 }
 
 export async function queryViewItems(
@@ -506,9 +596,17 @@ export type ViewLayout = (typeof VIEW_LAYOUTS)[number];
 // date-window labels (overdue/today/this week/later/no date).
 export const GROUP_FIELDS = ["status", "urgency", "type", "plan", "due", "scheduled"] as const;
 export type GroupField = (typeof GROUP_FIELDS)[number];
-// A board groups by a built-in field, or by a custom select/multi_select
-// property (a workflow's "Stage", slice 35) named by its property_schema key.
-export type ViewGrouping = { field: GroupField } | { propertyKey: string } | null;
+// A board groups by a built-in field, by a custom select/multi_select property (a
+// workflow's "Stage", slice 35) named by its property_schema key, or by a RELATION
+// field's role — group by Tags (Tyler, 2026-08-12). The relation variant is the
+// only multi-valued one that FANS OUT: a task with two tags shows in both columns
+// (see groupValuesFor). Its values are `relations` edges, so unlike the other two
+// they aren't on the row and the renderer must batch-fetch them.
+export type ViewGrouping =
+  | { field: GroupField }
+  | { propertyKey: string }
+  | { relationRole: string }
+  | null;
 
 // Which date a calendar/agenda places an item on, and which date a list/board
 // window filters/groups by. "plan" = the effective plan date (scheduled ?? due,
@@ -543,8 +641,13 @@ export type ViewColumn =
 // null = the defaults below, so a pre-existing calendar view is unchanged.
 
 // The calendar sub-mode: a month grid (all-day chips), the multi-day time-grid
-// (retiring; ADR-166), or the horizontal zoomable Timeline that replaces it.
-export const CALENDAR_MODES = ["month", "timegrid", "timeline"] as const;
+// (retiring; ADR-166), the horizontal zoomable Timeline that replaces it, or the
+// vertical "History" spine (2026-09-03) — Tyler's project review timeline made
+// available to any view. History rides here rather than becoming a sixth
+// view_layout so it needs no enum migration and inherits the whole engine
+// (filters, the AND/OR rules, sort, type scoping) plus every ViewRenderer mount
+// (the view page, list lens tabs, dashboard widgets, related groups, the Desk).
+export const CALENDAR_MODES = ["month", "timegrid", "timeline", "spine"] as const;
 export type CalendarMode = (typeof CALENDAR_MODES)[number];
 
 // Timeline zoom = how much time fills the screen; sets px-per-day (the geometry
@@ -578,14 +681,23 @@ export type ViewDisplay = {
   workEndHour?: number; // 1–24, default 19; always > workStartHour
   showWeekends?: boolean; // default true
   showCalendar?: boolean; // overlay read-only synced calendar events; default false
-  // --- Timeline mode (ADR-166) ---
-  zoom?: TimelineZoom; // px-per-day; default "week"
+  // --- Timeline + History modes (ADR-166) ---
+  // One granularity knob for both renderings: px-per-day on the horizontal
+  // Timeline, and the span one chip covers on the vertical History spine. Two
+  // keys meaning the same thing would leave a saved view with no answer to
+  // which one wins.
+  zoom?: TimelineZoom; // default "week"
   // The date field an item is anchored by, and optionally the field that ends
   // its span (a bar). null = derive from `prop` (start) / no span (end). A
   // withEnd date prop auto-pairs its "__end" key; startField/endField cover
   // ad-hoc pairings (e.g. scheduled→due). See placement.ts.
   startField?: DateRef | null;
   endField?: DateRef | null;
+  // --- Project cards (2026-08-17) ---
+  // Per-view override of which elements a project card shows, for a view scoped
+  // to a card-rendering type (project) on the list/board layouts. Absent =
+  // inherit the type default (settings.cardsByType) → DEFAULT_PROJECT_CARD.
+  card?: ProjectCardConfig;
 };
 
 // Resolved defaults for a calendar view with no (or partial) display config.
@@ -601,6 +713,7 @@ export const DISPLAY_DEFAULTS: Required<ViewDisplay> = {
   zoom: "week",
   startField: null,
   endField: null,
+  card: DEFAULT_PROJECT_CARD,
 };
 
 export type ViewDefinition = {
@@ -784,6 +897,16 @@ function parseGrouping(raw: unknown): ViewGrouping {
   if (raw == null) return null;
   if (typeof raw !== "object" || Array.isArray(raw)) bad("grouping must be an object or null");
   const r = raw as Record<string, unknown>;
+  // A relation grouping (group by Tags) is checked FIRST: for a typed relation
+  // field the role IS the property_schema key, so a stored grouping that carried
+  // both keys would otherwise be read as a scalar property grouping and silently
+  // read items.properties — where a relation field never stores anything, giving
+  // one big "None" column instead of tag columns.
+  if (r.relationRole != null && r.relationRole !== "") {
+    const role = String(r.relationRole).trim();
+    if (!role || role.length > 40) bad("grouping.relationRole invalid");
+    return { relationRole: role };
+  }
   // A property grouping wins when present (a board by a custom select field).
   if (r.propertyKey != null && r.propertyKey !== "") {
     const key = String(r.propertyKey).trim();
@@ -871,6 +994,9 @@ export function parseDisplay(raw: unknown): ViewDisplay | null {
   if (sf) out.startField = sf;
   const ef = parseDateRef(r.endField);
   if (ef) out.endField = ef;
+  // Project-card element override (2026-08-17); tolerant like the rest.
+  const card = parseProjectCardConfig(r.card);
+  if (card) out.card = card;
   return Object.keys(out).length ? out : null;
 }
 
@@ -906,10 +1032,14 @@ export function parseViewInput(raw: unknown): ViewInput {
     }
     dateProperty = r.dateProperty as DateProperty;
   }
+  const display = parseDisplay(r.display);
   // Calendar/agenda need a date to place items on; default to the one the
   // type actually has — a meeting places by "When", everything else by its
   // plan date (scheduled ?? due, ADR-109) so tasks land on their planned day.
-  if ((layout === "calendar" || layout === "agenda") && !dateProperty) {
+  // NOT when display.startField already names the placement (a custom date
+  // property, 2026-09-03): the renderers prefer startField, so back-filling
+  // here would leave the stored view claiming a date field it doesn't use.
+  if ((layout === "calendar" || layout === "agenda") && !dateProperty && !display?.startField) {
     dateProperty = filter.type === "event" ? "meetingAt" : "plan";
   }
   return {
@@ -920,7 +1050,7 @@ export function parseViewInput(raw: unknown): ViewInput {
     columns: parseColumns(r.columns),
     layout,
     dateProperty,
-    display: parseDisplay(r.display),
+    display,
   };
 }
 

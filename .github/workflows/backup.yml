@@ -41,6 +41,9 @@ jobs:
     if: github.event_name == 'schedule' || inputs.job == 'backup'
     runs-on: ubuntu-latest
     steps:
+      # Needed for scripts/graph-chunked-upload.py below; this job used to run
+      # without a checkout because every step was inline shell.
+      - uses: actions/checkout@v7
       - name: Install matching postgres client
         run: |
           sudo install -d /usr/share/postgresql-common/pgdg
@@ -92,10 +95,11 @@ jobs:
             -d '{"item":{"@microsoft.graph.conflictBehavior":"replace"}}' \
             | python3 -c "import sys,json;print(json.load(sys.stdin)['uploadUrl'])")
           SIZE=$(stat -c%s "$FILE")
-          curl -fsS -X PUT "$UPLOAD_URL" \
-            -H "Content-Length: $SIZE" \
-            -H "Content-Range: bytes 0-$((SIZE-1))/$SIZE" \
-            --data-binary "@$FILE" > /dev/null
+          # Chunked: a single PUT of the whole dump stopped working once it
+          # crossed Graph's per-request ceiling (200MB on 2026-08-07 went
+          # through, 276MB on 2026-08-14 returned 400), and it failed every
+          # week after that. See scripts/graph-chunked-upload.py.
+          python3 scripts/graph-chunked-upload.py "$UPLOAD_URL" "$FILE"
           echo "uploaded $FILE ($SIZE bytes) to OneDrive /Ledgr/Backups/"
 
       - name: Report failure to Ledgr (when token exists)

@@ -15,8 +15,8 @@ const { BUILD_NAV, BUILD_ENTRIES, isBuildPath } = await import("../src/lib/build
 const { isNavIcon } = await import("../src/lib/nav-icons");
 
 check(
-  "three groups, in order DATA / INTERFACE / MAINTAIN",
-  BUILD_NAV.map((g) => g.label).join(",") === "DATA,INTERFACE,MAINTAIN"
+  "four groups, in order DATA / INTERFACE / MAINTAIN / SYSTEM",
+  BUILD_NAV.map((g) => g.label).join(",") === "DATA,INTERFACE,MAINTAIN,SYSTEM"
 );
 check(
   "BUILD_ENTRIES flattens every group entry",
@@ -43,10 +43,19 @@ check("isBuildPath false for / (home)", !isBuildPath("/"));
 check("isBuildPath false for /views (now Work-side)", !isBuildPath("/views"));
 check("isBuildPath false for /settings (both-places)", !isBuildPath("/settings"));
 check("isBuildPath false for a /buildfoo lookalike", !isBuildPath("/buildfoo"));
-// Dashboards keep Build chrome (an INTERFACE-building surface); a dashboard
-// assigned as Home/Today renders at / or /today, which stay Work chrome.
-check("isBuildPath true for /dashboards", isBuildPath("/dashboards"));
-check("isBuildPath true for /dashboards/[id]", isBuildPath("/dashboards/abc"));
+// The dashboards INDEX keeps Build chrome — managing dashboards is
+// INTERFACE-building. An INDIVIDUAL dashboard does NOT: `/dashboards/<id>` is the
+// "using it" context and keeps Work chrome (see the comment on isBuildPath).
+//
+// This line used to assert the opposite and had been failing silently, because
+// nothing ran it. Do not "fix" the code to match the old expectation: claiming
+// `/dashboards/...` as Build is what once made Build mode the ONLY way to view an
+// unassigned dashboard. The narrower rule is the deliberate one.
+check("isBuildPath true for /dashboards (the index)", isBuildPath("/dashboards"));
+check(
+  "isBuildPath FALSE for /dashboards/[id] (using one is Work)",
+  !isBuildPath("/dashboards/abc")
+);
 check("isBuildPath false for /today (Work surface)", !isBuildPath("/today"));
 check("isBuildPath false for a /dashboardsfoo lookalike", !isBuildPath("/dashboardsfoo"));
 
@@ -99,6 +108,14 @@ const work = dynamicCommandEntries({ types: [{ key: "note", label: "Note", icon:
 const build = dynamicCommandEntries({ types: [{ key: "note", label: "Note", icon: "notes" }], views: [], templates: [] }, "build");
 check("dynamic type href is the item list in Work", work[0].kind === "destination" && work[0].href === "/list/note");
 check("dynamic type href is the edit page in Build", build[0].kind === "destination" && build[0].href === "/build/types/note/edit");
+
+// A template has no builder route of its own; it opens its prototype item's
+// canvas (the templates index links the same way). Guards the 404 regression.
+const tmpl = dynamicCommandEntries(
+  { types: [], views: [], templates: [{ id: "t1", name: "Weekly note", type: "note", prototypeItemId: "i9" }] },
+  "build"
+);
+check("dynamic template href is the prototype item's canvas", tmpl[0].kind === "destination" && tmpl[0].href === "/items/i9");
 
 check("groupOrder: Items first in Work", groupOrder("work")[0] === "Items");
 check("groupOrder: Build & Settings first in Build", groupOrder("build")[0] === "Build & Settings");

@@ -127,15 +127,16 @@ export class GraphMailSource implements MailSource {
     };
   }
 
-  async listNewMessages(
-    deltaToken: string | null
+  // One walk of the delta stream from `startUrl`. Separate from
+  // listNewMessages so a re-sync can start it over with an empty accumulator:
+  // a walk abandoned part-way must not contribute its messages to the retry.
+  private async walkDelta(
+    startUrl: string,
+    resumed: string | null
   ): Promise<{ messages: NormalizedMessage[]; nextDeltaToken: string | null }> {
-    const { importId } = await this.resolveFolders();
-    let url: string | null =
-      deltaToken ?? this.base(`/mailFolders/${importId}/messages/delta?$select=${SELECT}`);
-
+    let url: string | null = startUrl;
     const messages: NormalizedMessage[] = [];
-    let nextDeltaToken: string | null = deltaToken;
+    let nextDeltaToken: string | null = resumed;
     for (let page = 0; url && page < MAX_PAGES; page++) {
       const data: DeltaPage = await graphGet<DeltaPage>(url);
       for (const raw of data.value ?? []) {
@@ -152,6 +153,30 @@ export class GraphMailSource implements MailSource {
       }
     }
     return { messages, nextDeltaToken };
+  }
+
+  async listNewMessages(
+    deltaToken: string | null
+  ): Promise<{ messages: NormalizedMessage[]; nextDeltaToken: string | null }> {
+    const { importId } = await this.resolveFolders();
+    const fresh = this.base(`/mailFolders/${importId}/messages/delta?$select=${SELECT}`);
+    if (!deltaToken) return this.walkDelta(fresh, null);
+    try {
+      return await this.walkDelta(deltaToken, deltaToken);
+    } catch (err) {
+      // Graph expires a delta token and answers 410 ("resync required") — after
+      // about 30 days, or whenever the mailbox's own sync state rolls over.
+      // Keeping it means asking the same rejected question every ten minutes
+      // forever, which is how email import stayed dead from 2026-08-24 to
+      // 2026-08-29. The documented recovery is the only recovery: drop the
+      // token and read the folder whole.
+      //
+      // Re-reading cannot duplicate anything: an imported message is MOVED to
+      // the Imported subfolder, so a full read of the import folder returns
+      // only what has not been imported yet.
+      if (!(err instanceof GraphError) || err.status !== 410) throw err;
+      return this.walkDelta(fresh, null);
+    }
   }
 
   async markImported(messageId: string): Promise<void> {

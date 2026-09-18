@@ -22,7 +22,7 @@ import {
 } from "@/lib/dashboard-tree";
 import { getItem, ItemError, type ItemListRow } from "@/lib/items";
 import { relatedSummaryFor } from "@/lib/relations";
-import { resolveStatusSchema } from "@/lib/status";
+import { orderedStatuses, resolveStatusSchema } from "@/lib/status";
 import { getType } from "@/lib/types";
 import { countViewItems, getView, queryViewItems, type ViewDefinition } from "@/lib/views";
 
@@ -38,7 +38,13 @@ async function groupingFor(view: ViewDefinition) {
   let groupOrder: string[] | undefined;
   let groupPropKind: string | null = null;
   const g = view.grouping;
-  if (g && "propertyKey" in g) {
+  if (g && "relationRole" in g) {
+    // Group by a relation field (Tags): the columns are tag TITLES discovered from
+    // the rows, so there's no canonical order to supply — orderedGroups sorts them
+    // alphabetically with "None" last. groupPropKind stays "relation" so the view
+    // page knows this board is read-only (a tag column can't be dropped into).
+    groupPropKind = "relation";
+  } else if (g && "propertyKey" in g) {
     const prop = type?.propertySchema.find((p) => p.key === g.propertyKey);
     groupOrder = prop?.options;
     groupPropKind = prop?.kind ?? null;
@@ -47,11 +53,16 @@ async function groupingFor(view: ViewDefinition) {
     // BoardDnd falls back to the built-in open/done/archived, and on a type with
     // custom statuses a drop into one of those spurious columns would write a
     // status the type never defined (the payload parser only slug-checks it).
-    groupOrder = statuses.map((s) => s.key);
+    // Category order, not the raw authored order (see view-render.ts).
+    groupOrder = orderedStatuses(statuses).map((s) => s.key);
   }
   const propertyLabels: Record<string, string> = {};
-  for (const p of type?.propertySchema ?? []) propertyLabels[p.key] = p.label;
-  return { groupOrder, propertyLabels, statuses, groupPropKind };
+  const propertyKinds: Record<string, string> = {};
+  for (const p of type?.propertySchema ?? []) {
+    propertyLabels[p.key] = p.label;
+    propertyKinds[p.key] = p.kind;
+  }
+  return { groupOrder, propertyLabels, propertyKinds, statuses, groupPropKind };
 }
 
 function toViewItem(i: ItemListRow): ViewItem {
@@ -180,6 +191,7 @@ export async function resolveWidget(
       count,
       groupOrder: grouping?.groupOrder,
       propertyLabels: grouping?.propertyLabels,
+      propertyKinds: grouping?.propertyKinds,
       statuses: grouping?.statuses,
       groupPropKind: grouping?.groupPropKind,
       related,

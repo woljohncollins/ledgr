@@ -29,16 +29,21 @@ import {
   MARKDOWN_FORMAT,
   type ItemBody,
 } from "@/lib/body";
-import { extractBodyText } from "@/lib/body-text";
+import { extractBodyText, notesMarkdown } from "@/lib/body-text";
+import { canonicalFormatForType } from "@/lib/modules";
 // Type-only (erased at runtime): types.ts imports ItemError from items.ts, so
 // a value import of getType would form a circular dependency. getType is
 // loaded dynamically inside moveItemType instead.
 import type { PropertyDef } from "@/lib/types";
 import { getItem, itemColumns, ItemError, type ItemStatus, type Urgency } from "@/lib/items";
+import { routeFor } from "@/lib/inbox-sources";
 import { syncMentionRelations } from "@/lib/mentions";
 import { syncPassageRefs } from "@/lib/passages/refs";
-import { dateToYmdUtc, parseRecurrence } from "@/lib/recurrence";
-import { recomputeRelativeChildren } from "@/lib/relative-subtask-service";
+import { relateItems } from "@/lib/relations";
+import { getSettings } from "@/lib/settings";
+import { parseRecurrence } from "@/lib/recurrence";
+import { shiftChildDates, type ShiftedChild } from "@/lib/relative-subtask-service";
+import { dayDelta, isDuePinned, shiftDay } from "@/lib/date-anchor";
 import {
   appTodayYmd,
   completeMaterializedOccurrence,
@@ -50,10 +55,15 @@ import {
   categoryOfStatus,
   defaultStatusKey,
   initialStatusKey,
+  resolveStatusKey,
   type StatusCategory,
+  type StatusDef,
 } from "@/lib/status";
 import { statusSchemaForType } from "@/lib/status-schema";
+import { getStorage } from "@/lib/storage";
 import { emitActivity, homeParentOf, isTrackedSubjectType } from "@/lib/activity";
+import { jobRunVerdict } from "@/lib/job-owners-store";
+import { captureError } from "@/lib/log";
 
 // A new revision is skipped when the latest one is younger than this; the
 // editor autosaves often (slice 5) and one snapshot per burst is enough
@@ -102,7 +112,12 @@ export type ItemInput = {
   // the type default.
   composition?: Record<string, unknown> | null;
   // Untriaged flag (PRD §4.2 Inbox): arrival paths set it, triage clears it.
+  // An explicit value always wins over the per-source route below.
   inbox?: boolean;
+  // Which arrival path made this item (ADR-249): one of INBOX_SOURCES' keys.
+  // Read only when `inbox` is absent, and only to look up where the owner told
+  // that path to file things. Not persisted on the row (deferred, cut 1).
+  source?: string;
   // Mark this item as template content (ADR-093). Set true to mint a template
   // prototype; children created under a template parent inherit it automatically
   // (see createItem), so callers only ever set it on the root prototype.
@@ -124,16 +139,53 @@ export type ItemPatch = Partial<ItemInput> & {
   expectedBodyDigest?: string;
 };
 
-async function assertTypeExists(type: string) {
+async function assertTypeExists(type: string): Promise<string | null> {
   // A soft-deleted type (ADR-058) is excluded: you can't create or retype an
   // item into a type that's sitting in Trash.
+  //
+  // Returns the type's attached bespoke-tool `capability`, because the caller
+  // needs it to resolve the canonical body format (ADR-260) and this row is
+  // already being read — one column, no extra query.
   const rows = await getDb()
-    .select({ key: types.key })
+    .select({ key: types.key, capability: types.capability })
     .from(types)
     .where(and(eq(types.key, type), isNull(types.deletedAt)));
   if (rows.length === 0) {
     throw new ItemError("bad_request", `unknown type '${type}'`);
   }
+  return rows[0].capability ?? null;
+}
+
+// Stamp a written body with the type's CANONICAL format (ADR-260).
+//
+// The body contract is { format, text } and the format is a property of the TYPE
+// (`canonicalFormatForType`) — a song's body is ChordPro, not markdown. Every
+// writer that composed a body from a plain markdown string, though, hardcoded
+// `{ format: "markdown" }`: all six MCP write paths did, and so did anything
+// POSTing `bodyMarkdown` to the REST API. On a song that silently broke three
+// things downstream, none of which raise an error: the chord chart stopped
+// rendering (print-html gates on the format), search indexed the chords and
+// directives instead of the lyrics (body-text routes chordpro through
+// chordProToText), and {{item.*}} token resolution started running over a chart
+// (item-tokens-service only resolves markdown).
+//
+// Fixing it here rather than in each caller makes it structural: the format can
+// no longer depend on which door a write came through. A body that already
+// carries the right format passes through untouched, and a type whose canonical
+// format IS markdown is a no-op, so this changes nothing for ordinary items.
+// `body` is `unknown` on ItemInput/ItemPatch (callers hand in whatever they
+// composed), so narrow before touching it: anything that isn't a well-formed
+// { format, text } passes through untouched for the existing validation to
+// reject, exactly as it did before.
+function stampCanonicalFormat(
+  body: unknown,
+  type: string,
+  capability: string | null
+): unknown {
+  if (!isItemBody(body)) return body;
+  const canonical = canonicalFormatForType(type, undefined, capability);
+  if (body.format === canonical) return body;
+  return { ...body, format: canonical };
 }
 
 // Parent must be the owner's own live item, and (on update) not the item
@@ -224,8 +276,30 @@ async function snapshotRevision(
   `);
 }
 
+// The write-path status guard (ADR-243). Statuses are user-defined per type, and
+// items.status is plain text, so nothing below this line stops a caller from
+// storing a key the type never had — it renders as nothing on the canvas and
+// buckets as not_started, which is how "set this goal to Active" used to fail
+// silently. Every writer (canvas, board drag, REST, machine API, MCP) routes
+// through createItem/updateItem, so one guard here covers all of them: resolve
+// the key or the label, else refuse and name the type's real statuses so the
+// caller can retry without a second round trip.
+function requireStatusKey(
+  schema: StatusDef[],
+  raw: string,
+  typeKey: string
+): string {
+  const key = resolveStatusKey(schema, raw);
+  if (key) return key;
+  throw new ItemError(
+    "bad_request",
+    `'${raw}' is not a status on type '${typeKey}'. Its statuses are: ` +
+      schema.map((st) => `${st.key} ("${st.label}")`).join(", ")
+  );
+}
+
 export async function createItem(ownerId: string, input: ItemInput) {
-  await assertTypeExists(input.type);
+  const capability = await assertTypeExists(input.type);
   // is_template is set explicitly on a prototype root, else inherited from a
   // template parent (ADR-093), so a subtask under a prototype is template
   // content too without any caller doing anything special.
@@ -238,10 +312,17 @@ export async function createItem(ownerId: string, input: ItemInput) {
   // started" status, and store its category alongside so the hot queries / the
   // done-checkbox / recurrence key off the indexed bucket.
   const schema = await statusSchemaForType(input.type);
-  const statusKey = input.status ?? initialStatusKey(schema);
+  const statusKey =
+    input.status !== undefined
+      ? requireStatusKey(schema, input.status, input.type)
+      : initialStatusKey(schema);
   const statusCat = categoryOfStatus(schema, statusKey);
 
-  const body = input.body ?? null;
+  const { inbox, destinationId } = await resolveRoute(ownerId, input);
+
+  // The type's canonical format wins over whatever the caller composed (ADR-260):
+  // a song's body is ChordPro even when it arrived as a plain markdown string.
+  const body = stampCanonicalFormat(input.body ?? null, input.type, capability);
   const rows = await getDb()
     .insert(items)
     .values({
@@ -249,7 +330,7 @@ export async function createItem(ownerId: string, input: ItemInput) {
       type: input.type,
       title: input.title ?? "",
       body,
-      bodyText: extractBodyText(body),
+      bodyText: extractBodyText(body, input.properties),
       status: statusKey,
       statusCategory: statusCat,
       dueDate: input.dueDate ?? null,
@@ -267,7 +348,7 @@ export async function createItem(ownerId: string, input: ItemInput) {
       url: input.url ?? null,
       parentId: input.parentId ?? null,
       properties: input.properties ?? null,
-      inbox: input.inbox ?? false,
+      inbox,
       isTemplate,
     })
     .returning(itemColumns);
@@ -289,7 +370,99 @@ export async function createItem(ownerId: string, input: ItemInput) {
       payload: { type: created.type },
     }).catch(() => {});
   }
+  // The destination edge (ADR-249) is written here, not at the API route's
+  // relateTo: four of the seven arrival paths call createItem directly and
+  // would silently drop their destination. Best-effort like the activity log
+  // above, so a failed edge never undoes a capture.
+  if (destinationId) {
+    await relateItems(ownerId, created.id, destinationId, "project").catch(() => {});
+  }
+  kickYoutubeTranscript(ownerId, created.type, created.url);
   return created;
+}
+
+/**
+ * Where this capture lands: the Inbox, filed away, or filed into a project.
+ *
+ * AN EXPLICIT `inbox` ALWAYS WINS. The per-source setting supplies a default
+ * when the caller is silent, never an override, so every MCP and API caller
+ * written before ADR-249 behaves exactly as it did. Settings are read only when
+ * a source names itself and the caller said nothing, so the ordinary create
+ * path adds no query (and getSettings is React-cached per request anyway).
+ *
+ * A destination that has been moved to Trash falls back to the Inbox rather
+ * than filing invisibly, and the setting is left alone so restoring the project
+ * restores the routing.
+ */
+export async function resolveRoute(
+  ownerId: string,
+  input: Pick<ItemInput, "inbox" | "source">
+): Promise<{ inbox: boolean; destinationId: string | null }> {
+  if (input.inbox !== undefined || !input.source) {
+    return { inbox: input.inbox ?? false, destinationId: null };
+  }
+  const { inboxRoutes } = await getSettings(ownerId);
+  const route = routeFor(inboxRoutes, input.source);
+  if (!route.destinationId) return route;
+  const live = await getDb()
+    .select({ id: items.id })
+    .from(items)
+    .where(
+      and(
+        eq(items.id, route.destinationId),
+        eq(items.ownerId, ownerId),
+        isNull(items.deletedAt)
+      )
+    );
+  return live.length > 0 ? route : { inbox: true, destinationId: null };
+}
+
+/**
+ * Start transcribing a video the moment it is saved, instead of leaving it to
+ * the ten-minute timer.
+ *
+ * ONE GUARD, IN THE ONE FUNCTION EVERY SAVE ALREADY GOES THROUGH: the phone
+ * share sheet, the desktop bookmarklet, quick capture in the app, and anything
+ * Claude files over the assistant connection all create their link here. That
+ * is why no capture route carries its own copy of this, and why a capture path
+ * added next year gets it without anyone remembering to wire it up.
+ *
+ * The timer stays as the backstop, and it is not redundant: it is what picks up
+ * a video saved while this copy was closed, or saved on another copy entirely
+ * (a video saved in the cloud arrives here on the next sync and waits for the
+ * next tick).
+ *
+ * FIRE AND FORGET, deliberately. The caller's reply goes back at once and the
+ * transcript finishes behind it, so sharing a video from a phone never waits on
+ * Whisper. Nothing here may delay or fail the create, so the promise is
+ * swallowed into captureError rather than returned: an unhandled rejection out
+ * of a background task takes the whole process down.
+ */
+function kickYoutubeTranscript(ownerId: string, type: string, url: string | null) {
+  // The cheap half first, in memory, so creating a task or a note pays one
+  // string comparison and nothing else.
+  if (type !== "link" || !url) return;
+  void (async () => {
+    // Loaded on demand, never at the top of this file: the transcript module
+    // reaches for yt-dlp and Whisper as child processes, and item creation is
+    // in practically every bundle on the server.
+    const { isYoutubeVideoUrl, runYoutubeTranscripts } = await import("@/lib/youtube/transcripts");
+    if (!isYoutubeVideoUrl(url)) return;
+    // Only the machine named under Scheduled work does this, exactly as the
+    // timer path checks. Whether the feature is switched on at all is the
+    // owner's separate setting, which the job reads for itself: asking it here
+    // too is how two answers to one question start disagreeing.
+    const { run } = await jobRunVerdict(ownerId, "youtube-transcript");
+    if (!run) return;
+    // Detached for the same reason the scheduled endpoint is: the save that
+    // started this is an HTTP request too, and it must not be held open while a
+    // video is transcribed.
+    await runYoutubeTranscripts(ownerId, { detach: true });
+  })().catch((err) =>
+    captureError("youtube-transcript", err, {
+      detail: { trigger: "a video was saved, so the transcript started at once" },
+    })
+  );
 }
 
 export async function updateItem(
@@ -305,6 +478,12 @@ export async function updateItem(
       statusCategory: items.statusCategory,
       type: items.type,
       body: items.body,
+      // The PRIOR dates + pins: date anchoring (ADR-253) shifts this item's
+      // deadline and its children by however far its scheduled date just moved,
+      // so the write needs the before-value. Free — this row is already read.
+      scheduledDate: items.scheduledDate,
+      dueDate: items.dueDate,
+      properties: items.properties,
     })
     .from(items)
     .where(
@@ -312,9 +491,28 @@ export async function updateItem(
     );
   if (existing.length === 0) throw new ItemError("not_found", "item not found");
 
-  if (patch.type !== undefined) await assertTypeExists(patch.type);
+  let typeCapability: string | null | undefined;
+  if (patch.type !== undefined) typeCapability = await assertTypeExists(patch.type);
   if (patch.parentId != null) {
     await assertValidParent(ownerId, patch.parentId, id);
+  }
+
+  // Re-stamp a written body with the type's canonical format (ADR-260), before
+  // the no-op comparison below so it compares the format that will actually be
+  // stored. The extra type lookup is paid ONLY when a body is being written and
+  // the patch didn't already resolve the capability by changing the type, so an
+  // ordinary status/date update costs nothing. Retyping an item (note → song)
+  // re-stamps too, which is what makes `move_item_type` land a valid ChordPro
+  // body instead of one still labelled markdown.
+  if (patch.body !== undefined) {
+    const effectiveType = patch.type ?? existing[0].type;
+    if (typeCapability === undefined) {
+      typeCapability = await assertTypeExists(effectiveType);
+    }
+    patch = {
+      ...patch,
+      body: stampCanonicalFormat(patch.body, effectiveType, typeCapability),
+    };
   }
 
   // The category this status change moves into (if the patch changes status).
@@ -322,9 +520,14 @@ export async function updateItem(
   // category, not a literal "done" — resolved through the type's schema. Also
   // the value written to status_category alongside the status key.
   let nextCategory: StatusCategory | undefined;
+  // The resolved status key to write (ADR-243): a caller may name a status by its
+  // label, and a name the type doesn't have is refused rather than stored.
+  let nextStatus: string | undefined;
   if (patch.status !== undefined) {
-    const schema = await statusSchemaForType(patch.type ?? existing[0].type);
-    nextCategory = categoryOfStatus(schema, patch.status);
+    const typeKey = patch.type ?? existing[0].type;
+    const schema = await statusSchemaForType(typeKey);
+    nextStatus = requireStatusKey(schema, patch.status, typeKey);
+    nextCategory = categoryOfStatus(schema, nextStatus);
   }
 
   // Recurrence-aware completion (ADR-076). Completing a recurring task is not a
@@ -401,7 +604,7 @@ export async function updateItem(
   if (patch.type !== undefined) set.type = patch.type;
   if (patch.title !== undefined) set.title = patch.title;
   if (patch.status !== undefined) {
-    set.status = patch.status;
+    set.status = nextStatus;
     set.statusCategory = nextCategory;
     // Completing an item triages it out of the Inbox (PRD §4.2): a finished task
     // is no longer "awaiting triage", so completion IS triage. Only on the
@@ -414,6 +617,25 @@ export async function updateItem(
   }
   if (patch.dueDate !== undefined) set.dueDate = patch.dueDate;
   if (patch.scheduledDate !== undefined) set.scheduledDate = patch.scheduledDate;
+  // Date anchoring (ADR-253): the deadline hangs off the plan date, so moving the
+  // plan carries the deadline along by the same number of days, preserving the gap
+  // the owner already set. Skipped when the caller set BOTH dates in one patch
+  // (it is stating them deliberately) and when the deadline is pinned (a hard
+  // external date that ignores the plan). This is what stops a completed recurring
+  // task from leaving a fossil deadline behind — the ADR-076 `maintainDueOffset`
+  // flag did this, but default-off and reachable only over MCP, so nobody had it.
+  const scheduledDelta =
+    patch.scheduledDate !== undefined
+      ? dayDelta(existing[0].scheduledDate, patch.scheduledDate)
+      : null;
+  if (
+    scheduledDelta !== null &&
+    patch.dueDate === undefined &&
+    existing[0].dueDate &&
+    !isDuePinned(existing[0].properties as Record<string, unknown> | null)
+  ) {
+    set.dueDate = shiftDay(existing[0].dueDate, scheduledDelta);
+  }
   if (patch.urgency !== undefined) set.urgency = patch.urgency;
   if (patch.meetingAt !== undefined) set.meetingAt = patch.meetingAt;
   if (patch.endAt !== undefined) set.endAt = patch.endAt;
@@ -436,10 +658,64 @@ export async function updateItem(
       patch.propertyPatch
     )}::jsonb`;
   }
+  // Completion stamp (ADR-196; widened to tasks in ADR-197): entering the done
+  // category writes properties.completed_at — the Timeline places a finished
+  // undated milestone at this date, and the project markdown document reports
+  // when each task finished — leaving done clears it. Composed on top of
+  // whatever properties write this patch already carries, so a status flip with
+  // a sibling property edit stays one atomic UPDATE. Recurring task series
+  // never reach here on completion (intercepted above — they advance instead of
+  // finishing), so only genuinely-completed items are stamped.
+  const stampType = patch.type ?? existing[0].type;
+  if ((stampType === "milestone" || stampType === "task") && nextCategory !== undefined) {
+    const wasDone = existing[0].statusCategory === "done";
+    const entering = nextCategory === "done" && !wasDone;
+    const leaving = nextCategory !== "done" && wasDone;
+    if (entering || leaving) {
+      const stamp = { completed_at: new Date().toISOString() };
+      if (patch.properties !== undefined) {
+        // Wholesale replace: fold the stamp into (or out of) the new object.
+        const base = { ...((patch.properties ?? {}) as Record<string, unknown>) };
+        if (entering) base.completed_at = stamp.completed_at;
+        else delete base.completed_at;
+        set.properties = base;
+      } else if (patch.propertyPatch !== undefined) {
+        // Per-key merge: re-derive with the stamp folded in, then strip on reopen.
+        const merged = entering
+          ? { ...patch.propertyPatch, ...stamp }
+          : patch.propertyPatch;
+        const mergeSql = sql`coalesce(${items.properties}, '{}'::jsonb) || ${JSON.stringify(merged)}::jsonb`;
+        set.properties = entering ? mergeSql : sql`(${mergeSql}) - 'completed_at'`;
+      } else {
+        set.properties = entering
+          ? sql`coalesce(${items.properties}, '{}'::jsonb) || ${JSON.stringify(stamp)}::jsonb`
+          : sql`coalesce(${items.properties}, '{}'::jsonb) - 'completed_at'`;
+      }
+    }
+  }
   if (patch.inbox !== undefined) set.inbox = patch.inbox;
+  // body_text carries the canvas Notes tab's markdown alongside the body
+  // (body-text.ts), so a notes-only save has to recompute it too — otherwise
+  // notes written on a paper or a song would never reach search. The notes this
+  // write lands on are resolved here in JS because the propertyPatch branch
+  // merges in SQL, so `set.properties` can't be read back; an untouched write
+  // falls through to the stored object and recomputes nothing.
+  const nextProperties =
+    patch.properties !== undefined
+      ? patch.properties
+      : patch.propertyPatch !== undefined
+        ? {
+            ...((existing[0].properties as Record<string, unknown> | null) ?? {}),
+            ...patch.propertyPatch,
+          }
+        : existing[0].properties;
+  const notesChanged =
+    notesMarkdown(nextProperties) !== notesMarkdown(existing[0].properties);
   if (writeBody) {
     set.body = patch.body;
-    set.bodyText = extractBodyText(patch.body);
+    set.bodyText = extractBodyText(patch.body, nextProperties);
+  } else if (notesChanged) {
+    set.bodyText = extractBodyText(existing[0].body, nextProperties);
   }
   if (Object.keys(set).length === 0) {
     // A patch that carried only a no-op body (the editor's on-open phantom
@@ -456,6 +732,10 @@ export async function updateItem(
     .where(and(eq(items.id, id), eq(items.ownerId, ownerId)))
     .returning(itemColumns);
   const updated = rows[0];
+  // Descendants moved by this write, captured as they were BEFORE it so the
+  // caller can offer an undo (ADR-253 / ADR-142). Empty on every write that
+  // didn't move a date.
+  let shiftedChildren: ShiftedChild[] = [];
   if (writeBody) {
     if (updated.body != null) await snapshotRevision(id, updated.body);
     // Runs on null bodies too: clearing a body clears its mention edges.
@@ -463,15 +743,14 @@ export async function updateItem(
     // Same contract for passage @/refs — the passage_refs sibling of mentions.
     await syncPassageRefs(ownerId, id, updated.body);
   }
-  // A scheduled-date change re-derives any relative subtasks (S5, ADR-085):
-  // each carries an offset from this parent's scheduled day, so moving the
-  // parent shifts them (and chains down). Only when scheduled actually changed.
-  if (patch.scheduledDate !== undefined) {
-    await recomputeRelativeChildren(
-      ownerId,
-      id,
-      updated.scheduledDate ? dateToYmdUtc(updated.scheduledDate) : null
-    );
+  // A scheduled-date move carries the whole subtask tree with it (ADR-253):
+  // every unpinned dated descendant shifts by the same number of days, so a
+  // parent bumped to next Monday takes its checklist along. Only when the date
+  // actually moved (a no-op re-save shifts nothing), and never when it was
+  // cleared or first set — there is no delta to apply then, and the children
+  // keep the dates they have.
+  if (scheduledDelta !== null) {
+    shiftedChildren = await shiftChildDates(ownerId, id, scheduledDelta);
   }
   // A materialized occurrence was just completed: advance its parent series and
   // clone the next occurrence (create-next-after-completion). Done after the
@@ -521,7 +800,12 @@ export async function updateItem(
       await advanceNextActionIfPinned(ownerId, parent.id, updated.id).catch(() => {});
     }
   }
-  return updated;
+  // Additive (ADR-183 carve-out): callers that ignore the key are unaffected; the
+  // item PATCH route passes it through so the client can raise "Moved N subtasks ·
+  // Undo" instead of moving the owner's dates silently.
+  return shiftedChildren.length > 0
+    ? { ...updated, datesShifted: shiftedChildren }
+    : updated;
 }
 
 // The reconciliation summary for a type move (ADR-132). `carried` properties
@@ -776,7 +1060,7 @@ export async function restoreRevision(
   const body = rev[0].body;
   const rows = await db
     .update(items)
-    .set({ body, bodyText: extractBodyText(body) })
+    .set({ body, bodyText: extractBodyText(body, current.properties) })
     .where(and(eq(items.id, itemId), eq(items.ownerId, ownerId)))
     .returning(itemColumns);
   // The restored body's mentions + passage refs are the live ones now.
@@ -801,8 +1085,33 @@ export async function purgeExpiredTrash() {
       and (deleted_at is null or deleted_at >= ${cutoff})
     returning id
   `);
-  // relations/attachments/revisions rows go via ON DELETE CASCADE. (R2 bytes
-  // for attachments will need their own cleanup when storage lands.)
+  // relations/attachments/revisions rows go via ON DELETE CASCADE. The R2
+  // bytes behind those attachment rows are deleted HERE, before the cascade
+  // (ADR-237 — the debt this comment used to defer). Best-effort per object: a
+  // failed delete leaves an orphan the Data Hygiene sweep reconciles, never a
+  // blocked purge. Peers replicating this purge (sync/apply) deliberately do
+  // NOT repeat it — two installs can share one bucket, and the origin's purge
+  // deletes the bytes exactly once.
+  const doomedFiles = await db.execute(sql`
+    select a.storage_key from attachments a
+    join items i on i.id = a.parent_item_id
+    where i.deleted_at < ${cutoff}
+  `);
+  const storage = getStorage();
+  let purgedFiles = 0;
+  let orphanedFiles = 0;
+  for (const row of doomedFiles.rows) {
+    if (!storage) {
+      orphanedFiles += 1;
+      continue;
+    }
+    try {
+      await storage.deleteObject(String((row as Record<string, unknown>).storage_key));
+      purgedFiles += 1;
+    } catch {
+      orphanedFiles += 1;
+    }
+  }
   const purged = await db.execute(sql`
     delete from items where deleted_at < ${cutoff} returning id
   `);
@@ -816,5 +1125,7 @@ export async function purgeExpiredTrash() {
     purged: purged.rows.length,
     detached: detached.rows.length,
     purgedTypes: purgedTypes.rows.length,
+    purgedFiles,
+    orphanedFiles,
   };
 }

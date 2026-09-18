@@ -2,8 +2,8 @@ import { SignIn } from "@clerk/nextjs";
 
 // In-app sign-in page (vs Clerk's hosted account portal) so sign-in works
 // the same on a dev instance today and a production instance once a real
-// domain exists. Only Microsoft shows here: it is the sole connection
-// enabled in the Clerk dashboard.
+// domain exists. Which connections show is per-instance Clerk dashboard
+// config: Microsoft on Brandon's instance, Google on Tyler's.
 export default function SignInPage() {
   if (!process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY) {
     return (

@@ -7,6 +7,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { openItem } from "@/lib/item-nav";
 
 type Meeting = {
   id: string;
@@ -69,7 +70,7 @@ export default function TranscriptMeetingPicker({
         throw new Error(d?.error ?? `couldn't attach (${res.status})`);
       }
       const { meetingId } = await res.json();
-      router.push(`/items/${meetingId}`);
+      openItem(router, meetingId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "couldn't attach");
       setBusy(false);

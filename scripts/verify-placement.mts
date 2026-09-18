@@ -141,6 +141,33 @@ function item(over: Partial<PlaceableItem>): PlaceableItem {
   check("prop range write → launch__end = 07-30", pp?.["launch__end"] === "2026-07-30", pp?.["launch__end"]);
 }
 
+// --- timed custom date property (withTime, ADR-254): instant in, instant out
+{
+  const it = item({
+    type: "log_entry",
+    properties: {
+      logdate: "2026-09-11T02:06:00.000Z", // 10:06 PM New York on 09-10
+      [endPropKey("logdate")]: "2026-09-11T02:15:00.000Z",
+    },
+  });
+  const spec: PlacementSpec = { start: { prop: "logdate" }, end: { prop: endPropKey("logdate") } };
+  const p = resolvePlacement(it, spec, TZ);
+  check("timed prop → local day 09-10", p.start?.ymd === "2026-09-10", p.start?.ymd);
+  check("timed prop → 22:06 minutes", p.start?.minutes === 22 * 60 + 6, p.start?.minutes);
+  check("timed prop → end 22:15", p.end?.minutes === 22 * 60 + 15, p.end?.minutes);
+
+  const body = buildPatch(it, spec, TZ, {
+    start: { ymd: "2026-09-10", minutes: 9 * 60 },
+    end: { ymd: "2026-09-10", minutes: 9 * 60 + 30 },
+  });
+  const pp = asRec(body.propertyPatch);
+  check("timed prop write → start instant 13:00Z", pp?.logdate === "2026-09-10T13:00:00.000Z", pp?.logdate);
+  check("timed prop write → end instant 13:30Z", pp?.logdate__end === "2026-09-10T13:30:00.000Z", pp?.logdate__end);
+  // Day-only anchors still write a day, so a plain date field never grows a clock.
+  const dayBody = buildPatch(it, spec, TZ, { start: { ymd: "2026-09-12", minutes: null }, end: null });
+  check("day anchor write → day scalar", asRec(dayBody.propertyPatch)?.logdate === "2026-09-12");
+}
+
 // --- backwards span (scheduled after due) → drops the end, renders a chip
 {
   const it = item({

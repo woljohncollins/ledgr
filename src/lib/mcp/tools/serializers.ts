@@ -16,6 +16,10 @@ export function rowView(r: {
   status: string;
   urgency: number | null;
   dueDate: Date | null;
+  // The planned date (ADR-073/076) — distinct from the dueDate deadline, and
+  // the field a recurring series advances. Optional here only because the FTS
+  // row shape (search.ts) doesn't select it; every other source does.
+  scheduledDate?: Date | null;
   meetingAt: Date | null;
   url: string | null;
   parentId: string | null;
@@ -31,6 +35,7 @@ export function rowView(r: {
     status: r.status,
     urgency: r.urgency,
     dueDate: r.dueDate,
+    ...(r.scheduledDate !== undefined ? { scheduledDate: r.scheduledDate } : {}),
     meetingAt: r.meetingAt,
     url: r.url,
     parentId: r.parentId,
@@ -63,8 +68,10 @@ export function typeView(t: TypeDefinition) {
   };
 }
 
-// One view's definition — the list_views shape plus columns/dateProperty, so
-// create_view/update_view echo the full stored view.
+// One view's definition — the list_views shape plus columns/dateProperty/display,
+// so create_view/update_view echo the full stored view. `display` is echoed
+// because update_view REPLACES wholesale: without it in the read, an update
+// would silently wipe a view's calendar mode, grain, or custom-date placement.
 export function viewView(v: ViewDefinition) {
   return {
     id: v.id,
@@ -76,6 +83,7 @@ export function viewView(v: ViewDefinition) {
     grouping: v.grouping,
     columns: v.columns,
     dateProperty: v.dateProperty,
+    display: v.display,
   };
 }
 
@@ -108,15 +116,37 @@ export function dashView(d: Dashboard) {
 }
 
 // A nav slot, compactly: a destination's route, or a tools group's children.
+// `icon` is returned on every slot and child, and that is load-bearing, not
+// detail: update_nav REPLACES the whole slot list, so a caller reads the nav,
+// edits one slot, and sends the list back. While this view omitted icons, that
+// round-trip stamped the owner's entire nav with the generic fallback glyph,
+// because parseNavDestination defaults a missing icon to NAV_ICON_FALLBACK
+// rather than rejecting the slot (2026-09-14, Tyler's rail). Same shape as the
+// type icon/color loss in ADR-258: a lossy read plus a wholesale write silently
+// destroys a presentation choice. Anything added to a slot belongs here too.
 function slotView(slot: NavSlotConfig) {
   if (slot.type === "tools") {
     return {
       type: "tools" as const,
       label: slot.label,
-      children: slot.children.map((c) => ({ label: c.label, href: c.href, kind: c.kind })),
+      icon: slot.icon,
+      children: slot.children.map((c) => ({
+        label: c.label,
+        href: c.href,
+        kind: c.kind,
+        icon: c.icon,
+        ...(c.badge ? { badge: c.badge } : {}),
+      })),
     };
   }
-  return { type: "destination" as const, label: slot.label, href: slot.href, kind: slot.kind };
+  return {
+    type: "destination" as const,
+    label: slot.label,
+    href: slot.href,
+    kind: slot.kind,
+    icon: slot.icon,
+    ...(slot.badge ? { badge: slot.badge } : {}),
+  };
 }
 
 // The navigation shape describe_workspace + update_nav report: the layout knobs,
@@ -127,6 +157,8 @@ export function navView(s: UserSettings) {
     railSize: s.railSize,
     density: s.navDensity,
     railAnchor: s.railAnchor,
+    // What the one Search slot opens (ADR-182): palette | page.
+    searchMode: s.searchMode,
     homeDashboardId: s.homeDashboardId,
     todayDashboardId: s.todayDashboardId,
     slots: s.navSlots.map(slotView),

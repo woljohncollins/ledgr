@@ -10,7 +10,7 @@
 import { BUILD_ENTRIES } from "@/lib/build-nav";
 import { isIconRef } from "@/lib/nav-icons";
 import { NOTIFICATION_CENTER_ENABLED } from "@/lib/notifications-enabled";
-import type { NavBadge, NavDestKind } from "@/lib/settings";
+import { SEARCH_HREF, type NavBadge, type NavDestKind } from "@/lib/settings";
 
 export type DestGroup = "Built-in" | "Dashboards" | "Views" | "Types" | "Build tools";
 
@@ -41,11 +41,12 @@ export const BUILTIN_DESTS: DestOption[] = [
   // opt-in posture); it's not a default slot.
   { group: "Built-in", kind: "builtin", href: "/desk", label: "Desk", icon: "grid", badgeEligible: false },
   { group: "Built-in", kind: "builtin", href: "/favorites", label: "Favorites", icon: "starred", badgeEligible: false },
-  // "Advanced search" distinguishes the PAGE (stacked criteria with per-criterion
-  // confidence, ADR-172) from the ⌘K palette that every layout already carries a
-  // permanent button for. Two different tools; the label is what tells them apart
-  // in a bar that shows both.
-  { group: "Built-in", kind: "builtin", href: "/search", label: "Advanced search", icon: "search", badgeEligible: false },
+  // ONE Search destination (ADR-182). It used to be listed as "Advanced search"
+  // to distinguish the PAGE from the ⌘K palette that every layout hardcoded a
+  // second, permanent button for — so a default nav showed search twice, and only
+  // one of the two was configurable. Now it's a single icon whose behavior is the
+  // owner's `searchMode` choice (palette | page), set on Build → Navigation.
+  { group: "Built-in", kind: "builtin", href: SEARCH_HREF, label: "Search", icon: "search", badgeEligible: false },
   { group: "Built-in", kind: "builtin", href: "/dashboards", label: "Dashboards", icon: "dashboard", badgeEligible: false },
   { group: "Built-in", kind: "builtin", href: "/items", label: "Items", icon: "items", badgeEligible: false },
   { group: "Built-in", kind: "builtin", href: "/views", label: "Views", icon: "views", badgeEligible: false },

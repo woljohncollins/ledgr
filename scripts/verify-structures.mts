@@ -23,9 +23,14 @@ const {
   STRUCTURE_PRESETS,
   STAGE_KEY,
 } = await import("../src/lib/structure-templates");
-const { groupValueFor, orderedGroups, dueBucket, NONE_GROUP } = await import(
-  "../src/lib/view-grouping"
-);
+const {
+  groupValueFor,
+  groupValuesFor,
+  orderedGroups,
+  boardDropPatch,
+  dueBucket,
+  NONE_GROUP,
+} = await import("../src/lib/view-grouping");
 const { ItemError } = await import("../src/lib/items");
 const { eq } = await import("drizzle-orm");
 
@@ -96,7 +101,8 @@ for (const preset of STRUCTURE_PRESETS) {
 }
 
 // --- pure: grouping helpers -----------------------------------------------
-const mk = (props: Record<string, unknown> | null) => ({
+const mk = (props: Record<string, unknown> | null, id = "item-1") => ({
+  id,
   status: "open",
   urgency: null,
   kind: null,
@@ -108,8 +114,77 @@ const mk = (props: Record<string, unknown> | null) => ({
 const stageGrouping = { propertyKey: STAGE_KEY };
 check("groupValueFor reads a property", groupValueFor(mk({ stage: "Interview" }), stageGrouping, now) === "Interview");
 check("missing property is the none group", groupValueFor(mk({}), stageGrouping, now) === NONE_GROUP);
-check("array property joins", groupValueFor(mk({ stage: ["a", "b"] }), stageGrouping, now) === "a, b");
 check("field grouping still works", groupValueFor(mk(null), { field: "status" }, now) === "open");
+
+// Fan-out (2026-08-12). A multi-valued grouping now puts a row in EVERY one of its
+// values rather than one combined "a, b" column — that composite column was shared
+// with nothing, which is the opposite of grouping. groupValueFor keeps returning a
+// single value for the board-DnD path, so it reports the FIRST.
+check(
+  "multi_select fans out to each value",
+  JSON.stringify(groupValuesFor(mk({ stage: ["a", "b"] }), stageGrouping, now)) ===
+    JSON.stringify(["a", "b"])
+);
+check(
+  "groupValueFor takes the first of a multi value",
+  groupValueFor(mk({ stage: ["a", "b"] }), stageGrouping, now) === "a"
+);
+check(
+  "a single-valued property is still one group",
+  JSON.stringify(groupValuesFor(mk({ stage: "Interview" }), stageGrouping, now)) ===
+    JSON.stringify(["Interview"])
+);
+check(
+  "empty multi_select is the none group",
+  JSON.stringify(groupValuesFor(mk({ stage: [] }), stageGrouping, now)) ===
+    JSON.stringify([NONE_GROUP])
+);
+check(
+  "duplicate values collapse (a row can't appear twice in one column)",
+  JSON.stringify(groupValuesFor(mk({ stage: ["a", "a"] }), stageGrouping, now)) ===
+    JSON.stringify(["a"])
+);
+
+// Relation grouping (group by Tags): values come from edges keyed by source id, not
+// from the row, so a missing map entry must read as untagged rather than throw.
+const tagGrouping = { relationRole: "tags" };
+const tagEdges = new Map([
+  ["item-1", [{ id: "t1", title: "Work" }, { id: "t2", title: "Urgent" }]],
+  ["item-2", []],
+]);
+check(
+  "relation grouping fans out to each tag",
+  JSON.stringify(groupValuesFor(mk(null, "item-1"), tagGrouping, now, tagEdges)) ===
+    JSON.stringify(["Work", "Urgent"])
+);
+check(
+  "a row with no edges is the none group",
+  JSON.stringify(groupValuesFor(mk(null, "item-2"), tagGrouping, now, tagEdges)) ===
+    JSON.stringify([NONE_GROUP])
+);
+check(
+  "a row absent from the edge map is the none group",
+  JSON.stringify(groupValuesFor(mk(null, "item-99"), tagGrouping, now, tagEdges)) ===
+    JSON.stringify([NONE_GROUP])
+);
+check(
+  "no edge map at all is the none group, not a crash",
+  JSON.stringify(groupValuesFor(mk(null, "item-1"), tagGrouping, now)) ===
+    JSON.stringify([NONE_GROUP])
+);
+check(
+  "a blank tag title is ignored",
+  JSON.stringify(
+    groupValuesFor(mk(null, "x"), tagGrouping, now, new Map([["x", [{ id: "t", title: "  " }]]]))
+  ) === JSON.stringify([NONE_GROUP])
+);
+// A tag board must not be droppable: moving a card would mean rewriting edges, and
+// with fan-out "dragged out of Work" is ambiguous when the card is also in Urgent.
+check("a relation grouping is not droppable", boardDropPatch(tagGrouping, "Work") === null);
+check(
+  "a select property grouping still IS droppable",
+  boardDropPatch(stageGrouping, "Offer") !== null
+);
 
 const present = new Set(["Interview", "Applied", NONE_GROUP]);
 const ordered = orderedGroups(stageGrouping, present, ["Applied", "Interview", "Offer"]);

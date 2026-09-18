@@ -73,6 +73,26 @@ export default function MindmapCanvasClient({ itemId, initialTitle, initialBody 
   const [copied, setCopied] = useState(false);
   const { patch, saveState } = useItemAutosave(itemId);
   const inputs = useRef(new Map<string, HTMLInputElement>());
+  // Hover-intent for the node action buttons (Tyler, 2026-08-17): pure
+  // :hover made the +/× vanish the instant the cursor slipped off the node,
+  // so the buttons were often unreachable (especially the delete ×). Leaving a
+  // node now starts a short grace timer before the buttons hide; re-entering
+  // the node OR any of its buttons (they're DOM children) cancels it.
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hoverNode = (id: string) => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    setHoveredId(id);
+  };
+  const unhoverNode = () => {
+    if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    hoverTimer.current = setTimeout(() => setHoveredId(null), 400);
+  };
+  useEffect(() => {
+    return () => {
+      if (hoverTimer.current) clearTimeout(hoverTimer.current);
+    };
+  }, []);
   // The node to focus once the next tree render commits (a created/moved node).
   // A ref, not state, so setting it never triggers an extra render — the focus
   // happens in the effect that runs after `root` re-renders.
@@ -270,8 +290,11 @@ export default function MindmapCanvasClient({ itemId, initialTitle, initialBody 
             // before you reach them).
             const outward = onLeft ? "right-full" : "left-full";
             const inward = onLeft ? "left-full" : "right-full";
+            // Shown by the hover-intent state (grace period), not raw :hover —
+            // keyboard focus still reveals them via group-focus-within.
+            const shown = hoveredId === n.id ? "flex" : "hidden group-focus-within:flex";
             const addBtn =
-              "hidden group-hover:flex group-focus-within:flex absolute z-10 h-5 w-5 items-center justify-center rounded-full border border-neutral-700 bg-neutral-900 text-neutral-400 shadow-md shadow-black/40 hover:border-[var(--accent)] hover:text-neutral-100";
+              `${shown} absolute z-10 h-5 w-5 items-center justify-center rounded-full border border-neutral-700 bg-neutral-900 text-neutral-400 shadow-md shadow-black/40 hover:border-[var(--accent)] hover:text-neutral-100`;
             return (
               <div
                 key={n.id}
@@ -283,6 +306,8 @@ export default function MindmapCanvasClient({ itemId, initialTitle, initialBody 
                   height: NODE_H,
                   flexDirection: onLeft ? "row-reverse" : "row",
                 }}
+                onMouseEnter={() => hoverNode(n.id)}
+                onMouseLeave={unhoverNode}
               >
                 {n.hasChildren && (
                   <button
@@ -344,10 +369,14 @@ export default function MindmapCanvasClient({ itemId, initialTitle, initialBody 
                     >
                       <Glyph d={ICON.plus} />
                     </button>
-                    {/* Delete — inward-top corner, away from the add cluster. */}
+                    {/* Delete — flush on the inward edge (toward the root),
+                        vertically centered, away from the add cluster. It used
+                        to sit diagonally off the corner, where the only path to
+                        it left the hover zone and the button vanished mid-reach
+                        (Tyler, 2026-08-17); flush + the grace timer fix that. */}
                     <button
                       onClick={() => onDelete(n.id)}
-                      className={`hidden group-hover:flex group-focus-within:flex absolute z-10 bottom-full ${inward} h-5 w-5 items-center justify-center rounded-full border border-neutral-700 bg-neutral-900 text-neutral-500 shadow-md shadow-black/40 hover:border-red-700 hover:text-red-400`}
+                      className={`${shown} absolute z-10 top-1/2 -translate-y-1/2 ${inward} h-5 w-5 items-center justify-center rounded-full border border-neutral-700 bg-neutral-900 text-neutral-500 shadow-md shadow-black/40 hover:border-red-700 hover:text-red-400`}
                       title="Delete this spoke and everything under it"
                     >
                       <Glyph d={ICON.close} />

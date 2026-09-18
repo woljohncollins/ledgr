@@ -22,8 +22,11 @@ import Image from "@tiptap/extension-image";
 import { Table, TableCell, TableHeader, TableRow } from "@tiptap/extension-table";
 import {
   BLOCKNOTE_COLORS,
+  ACCENT_HIGHLIGHT,
+  ACCENT_HIGHLIGHT_BG,
   highlightColorName,
   highlightTag,
+  isHighlightColor,
   isBlockNoteColor,
   textColorName,
   textColorTag,
@@ -165,12 +168,18 @@ export const Highlight = Mark.create({
 
   renderHTML({ mark }) {
     const color = mark.attrs.color;
-    if (!isBlockNoteColor(color)) return ["mark", {}, 0];
+    if (!isHighlightColor(color)) return ["mark", {}, 0];
+    // The accent highlight keeps the owner's live --accent reference rather than
+    // a literal, so re-picking an accent in settings restyles it (colors.ts).
+    const background =
+      color === ACCENT_HIGHLIGHT
+        ? ACCENT_HIGHLIGHT_BG
+        : BLOCKNOTE_COLORS[color].background;
     return [
       "mark",
       mergeAttributes({
         class: `hl-${color}`,
-        style: `background-color:${BLOCKNOTE_COLORS[color].background}`,
+        style: `background-color:${background}`,
       }),
       0,
     ];
@@ -179,7 +188,7 @@ export const Highlight = Mark.create({
   renderMarkdown(node, helpers) {
     const content = helpers.renderChildren(node);
     const color = node.attrs?.color;
-    if (!isBlockNoteColor(color)) return `<mark>${content}</mark>`;
+    if (!isHighlightColor(color)) return `<mark>${content}</mark>`;
     const tag = highlightTag(color);
     return `${tag.open}${content}${tag.close}`;
   },
@@ -351,6 +360,95 @@ export const EmptyListItemFix = Extension.create({
       const bound = (serialize as (doc: unknown) => string).bind(mgr);
       mgr.serialize = (doc: unknown) => spaceEmptyListItems(bound(doc));
     }
+  },
+});
+
+// Footnote markers survive the rich editor (Tyler, 2026-09-16). Footnotes
+// (`[^id]` markers plus their `[^id]: text` definitions) are deliberately NOT in
+// the shared body dialect — they are hand-parsed by the Papers module and its
+// .docx renderer (CLAUDE.md; src/lib/papers/msm-docx.ts) and render as literal
+// text everywhere else. "Literal text" was fine while the Draft tab was a raw
+// textarea, but the moment the Draft moved onto the shared Tiptap surface the
+// markers stopped surviving a save: @tiptap/markdown backslash-escapes
+// markdown-significant characters in every text node on serialize, so
+// `[^1]` came back as `\[^1\]` and `[^1]: John Calvin…` as `\[^1\]: …`.
+// msm-docx's `/^\[\^([^\]]+)\]:/` definition matcher then finds nothing, every
+// marker is dropped as "a marker with no definition" (allocRuns), and the paper
+// exports with its citations silently gone — the module's actual deliverable.
+//
+// This is the same class of bug as MarkdownEscapeFix above and takes the same
+// shape: the serializer is right to escape text it emits AS markdown, but these
+// markers are read back literally by a hand-written parser, so the escapes are
+// pure corruption. Patching `serialize` (not encodeTextForMarkdown) because a
+// footnote marker carries no mark to key off — it is bare text, so the fix has
+// to be a pass over the finished document.
+//
+// OPT-IN, not global: only a host that actually speaks footnotes should get it
+// (the Papers Draft), because un-escaping `\[^…\]` in an ordinary note would
+// rewrite text the owner typed literally. MarkdownEditor adds it only when
+// `preserveFootnotes` is set.
+const ESCAPED_FOOTNOTE_RE = /\\\[\^([^\]\\]+)\\\]/g;
+
+export function unescapeFootnotes(markdown: string): string {
+  return markdown.replace(ESCAPED_FOOTNOTE_RE, "[^$1]");
+}
+
+export const FootnoteMarkdownFix = Extension.create({
+  name: "footnoteMarkdownFix",
+  // Same onBeforeCreate discipline as the two fixes above: register AFTER
+  // Markdown so the manager exists to patch.
+  onBeforeCreate() {
+    const mgr = (this.editor as unknown as { markdown?: Record<string, unknown> }).markdown;
+    if (!mgr) return;
+    const serialize = mgr.serialize;
+    if (typeof serialize !== "function") return;
+    const bound = (serialize as (doc: unknown) => string).bind(mgr);
+    mgr.serialize = (doc: unknown) => unescapeFootnotes(bound(doc));
+  },
+});
+
+// Inline HTML dialect elements (<span style=color>, <mark>, <ins class="slide">)
+// survive inside an ORDERED list item exactly as they do inside a bullet (Brandon,
+// 2026-08-13 — confirmed from a sermon note corrupted twice: a colored span nested
+// under an ordered sub-list came back as literal `&lt;span style="color:…"&gt;` text
+// after a save round-trip; the identical span one line down, under an unordered
+// sub-list, was untouched).
+//
+// Root cause lives in @tiptap/extension-list's OrderedList.parseMarkdown
+// (parseListItems, ordered-list/utils.ts — can't patch it, it's in node_modules).
+// A tight list item's content arrives from marked as a "text" token carrying BOTH
+// a flattened raw string (`.text`, HTML and all, un-parsed) and the properly
+// inline-tokenized breakdown (`.tokens` — the same span split into html-open/
+// text/html-close, or, once the color/highlight/slide extensions below claim it,
+// a dedicated textColor/highlight/slide token). BulletList's item handling
+// (ListItem.parseMarkdown, shared by every non-ordered list) reads `.tokens` via
+// `helpers.parseInline(firstToken.tokens)` — correct. OrderedList's own
+// `parseListItems` instead calls `helpers.parseChildren([itemToken])`, which
+// dispatches by token TYPE through the generic per-tokenName registry and lands on
+// @tiptap/extension-text's built-in Text.parseMarkdown — which ignores `.tokens`
+// and returns `.text` verbatim. The doc ends up with a literal `<span…>` substring
+// inside a plain text node, which the markdown serializer then HTML-entity-escapes
+// on save like any other literal `<` in plain text — the `&lt;span` corruption.
+//
+// Fix: register our OWN parseMarkdown for the SAME "text" markdownTokenName, at a
+// priority above the built-in Text node's (100) so MarkdownManager.parseToken's
+// per-tokenName handler list (populated in extension REGISTRATION order, tried
+// first-to-last) tries ours first. When the token carries `.tokens` (marked always
+// populates it for a tight list item, empty only for the rare token with none),
+// inline-parse those — reclaiming any dialect mark exactly the way a bullet item
+// would — instead of the flattened string. A token with no `.tokens` returns `[]`,
+// which MarkdownManager treats as "no match" and falls through to the built-in
+// Text handler unchanged, so plain text is untouched. Not special-cased to spans:
+// this fixes the shared dispatch bug, so every HTML-wrapped mark (and any future
+// one) survives an ordered list the same way it survives a bullet.
+export const OrderedListTextFix = Extension.create({
+  name: "orderedListTextFix",
+  priority: 200,
+  markdownTokenName: "text",
+  parseMarkdown(token, helpers) {
+    const tokens = (token as { tokens?: unknown[] }).tokens;
+    if (!tokens || tokens.length === 0) return [];
+    return helpers.parseInline(tokens as Parameters<typeof helpers.parseInline>[0]);
   },
 });
 

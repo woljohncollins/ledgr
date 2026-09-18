@@ -19,38 +19,18 @@ import {
   setKnownVersion,
 } from "@/lib/save-status";
 import { publishBodyMarkdown } from "@/lib/word-count";
+import { uploadAttachment } from "@/components/attachments/upload";
 import BodyEditor from "./BodyEditor";
 import type { PromotedRefs } from "./block-anchor-extension";
 import { useTokenAutocomplete } from "./useTokenAutocomplete";
 
 const SAVE_DEBOUNCE_MS = 1500;
 
-// Presigned-upload flow (PRD §3.4): a metadata row + URL from our API, the
-// bytes straight to R2, the public CDN URL back into the markdown. Re-wired for
-// the Tiptap canvas after the M3 cutover dropped BlockNote's file blocks.
-async function uploadImage(itemId: string, file: File): Promise<string> {
-  const res = await fetch("/api/attachments", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      itemId,
-      filename: file.name || "pasted-image.png",
-      contentType: file.type || "application/octet-stream",
-      sizeBytes: file.size,
-    }),
-  });
-  if (!res.ok) {
-    const detail = await res.json().catch(() => null);
-    throw new Error(detail?.error ?? `upload rejected (${res.status})`);
-  }
-  const { uploadUrl, publicUrl } = await res.json();
-  const put = await fetch(uploadUrl, {
-    method: "PUT",
-    headers: { "Content-Type": file.type || "application/octet-stream" },
-    body: file,
-  });
-  if (!put.ok) throw new Error(`storage upload failed (${put.status})`);
-  return publicUrl;
+// Presigned-upload flow: the shared uploadAttachment handshake (any file type —
+// the editor embeds images and links everything else), resolved to the stable
+// /files/<id> address the body stores (fileUrl, not publicUrl, ADR-228).
+async function uploadFile(itemId: string, file: File): Promise<string> {
+  return (await uploadAttachment(itemId, file)).fileUrl;
 }
 
 export type ItemEditorProps = {
@@ -439,7 +419,7 @@ export default function ItemEditor({
     <BodyEditor
       itemId={item.id}
       initialMarkdown={bodyMarkdown(item.body)}
-      uploadImage={(file) => uploadImage(item.id, file)}
+      uploadFile={(file) => uploadFile(item.id, file)}
       onChange={onBodyChange}
       promoteToMeetingId={promoteToMeetingId}
       promotedRefs={promotedRefs}

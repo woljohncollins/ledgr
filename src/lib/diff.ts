@@ -4,11 +4,12 @@
 // are markdown text (the canonical { format, text }, ADR-037), so the diff is
 // over the markdown source — honest about exactly what changed, no DOM diffing.
 //
-// Strategy: trim the common prefix and suffix first (most edits to a long doc
-// touch a small contiguous region, so the differing middle is tiny), then run a
-// full LCS only on that middle. A size guard falls back to a coarse
-// delete-all + add-all when the middle is pathologically large, so a huge
-// rewrite can never hang the UI.
+// Strategy: two tiers, the git/GitHub shape. A line-level LCS runs first so
+// unchanged paragraphs anchor as eq wherever the edits sit (prefix/suffix
+// trimming alone dies the moment a doc has edits near both ends); each changed
+// line region then gets a word-level LCS of its own, so every word table stays
+// tiny. A size guard falls back to a coarse delete-all + add-all when a region
+// is pathologically large, so a huge rewrite can never hang the UI.
 
 export type DiffOp = "eq" | "add" | "del";
 export type DiffSegment = { op: DiffOp; text: string };
@@ -20,6 +21,13 @@ export type DiffSegment = { op: DiffOp; text: string };
 // input exactly (the regex partitions the string with no gaps).
 export function tokenizeWords(text: string): string[] {
   return text.match(/\n|[^\S\n]+|[^\s]+/g) ?? [];
+}
+
+// Tokenize into lines, each keeping its trailing newline so concatenating the
+// tokens reproduces the input exactly (a final line without a newline is its
+// own token).
+function tokenizeLines(text: string): string[] {
+  return text.match(/[^\n]*\n|[^\n]+/g) ?? [];
 }
 
 // Above this token-product the middle LCS is skipped for a coarse whole-region
@@ -91,13 +99,9 @@ function lcsDiff(a: string[], b: string[]): DiffSegment[] {
   return segs;
 }
 
-// Diff two markdown strings into ordered eq/add/del segments. `a` is the older
-// text, `b` the newer; an "add" is in b-not-a, a "del" is in a-not-b.
-export function diffWords(a: string, b: string): DiffSegment[] {
-  if (a === b) return a === "" ? [] : [{ op: "eq", text: a }];
-  const at = tokenizeWords(a);
-  const bt = tokenizeWords(b);
-
+// Trim the common prefix and suffix off two token arrays, LCS the middle.
+// Works for any token granularity (lines above, words within a region).
+function trimmedLcsDiff(at: string[], bt: string[]): DiffSegment[] {
   // Common prefix.
   let start = 0;
   const minLen = Math.min(at.length, bt.length);
@@ -115,6 +119,46 @@ export function diffWords(a: string, b: string): DiffSegment[] {
   if (start > 0) out.push({ op: "eq", text: at.slice(0, start).join("") });
   out.push(...lcsDiff(at.slice(start, aEnd), bt.slice(start, bEnd)));
   if (aEnd < at.length) out.push({ op: "eq", text: at.slice(aEnd).join("") });
+  return out;
+}
+
+// Diff two markdown strings into ordered eq/add/del segments. `a` is the older
+// text, `b` the newer; an "add" is in b-not-a, a "del" is in a-not-b.
+export function diffWords(a: string, b: string): DiffSegment[] {
+  if (a === b) return a === "" ? [] : [{ op: "eq", text: a }];
+
+  // Tier 1: line-level. Unchanged lines anchor as eq no matter where the
+  // edits are, so each changed region handed to tier 2 stays small.
+  const lineOps = trimmedLcsDiff(tokenizeLines(a), tokenizeLines(b));
+
+  // Walk the line ops, buffering each contiguous changed region (its deleted
+  // and added lines) and word-diffing the pair; one-sided regions pass through
+  // as-is.
+  const out: DiffSegment[] = [];
+  let delBuf = "";
+  let addBuf = "";
+  const flush = () => {
+    if (delBuf !== "" && addBuf !== "") {
+      out.push(...trimmedLcsDiff(tokenizeWords(delBuf), tokenizeWords(addBuf)));
+    } else if (delBuf !== "") {
+      out.push({ op: "del", text: delBuf });
+    } else if (addBuf !== "") {
+      out.push({ op: "add", text: addBuf });
+    }
+    delBuf = "";
+    addBuf = "";
+  };
+  for (const seg of lineOps) {
+    if (seg.op === "eq") {
+      flush();
+      out.push(seg);
+    } else if (seg.op === "del") {
+      delBuf += seg.text;
+    } else {
+      addBuf += seg.text;
+    }
+  }
+  flush();
   return coalesce(out);
 }
 

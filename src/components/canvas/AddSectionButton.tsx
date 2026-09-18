@@ -1,9 +1,11 @@
-// "+ Add section" (Tyler, 2026-07-01): the replacement for the old Customize
-// gear. A large button below the project's card grid; clicking it lists the
-// sections not already on the page (Overview, Recent Activity, Timeline, plus
-// any default card that was removed) and adds the chosen one as a new card.
-// Adding appends a visible widget to the record's composition and PATCHes it —
-// the same hide-not-delete substrate the gear used, just additive and in place.
+// "+ Add a Tool" (Tyler, 2026-07-01; renamed from "Add section" 2026-08-17 —
+// the sections ARE the project's tools). A large button below the project's
+// card grid; clicking it lists the tools not already on the page (Overview,
+// Recent Activity, Timeline, plus any default card that was removed) and adds
+// the chosen one as a new card. Adding appends a visible widget to the
+// record's composition and PATCHes it — the same hide-not-delete substrate the
+// gear used, just additive and in place. When everything is already on the
+// page it says so instead of vanishing, so the affordance stays discoverable.
 "use client";
 
 import { useState } from "react";
@@ -46,13 +48,17 @@ export default function AddSectionButton({
     }
   }
 
-  if (addable.length === 0) return null;
+  if (addable.length === 0) {
+    return (
+      <p className="mt-3 py-2 text-center text-xs text-neutral-600">All tools already added.</p>
+    );
+  }
 
   return (
     <div className="mt-3">
       {open ? (
         <div className="rounded-lg border border-neutral-800 bg-neutral-900/40 p-2">
-          <p className="px-1 pb-1.5 text-xs uppercase tracking-wide text-neutral-500">Add a section</p>
+          <p className="px-1 pb-1.5 text-xs uppercase tracking-wide text-neutral-500">Add a Tool</p>
           <div className="flex flex-wrap gap-1.5">
             {addable.map((a) => (
               <button
@@ -80,7 +86,7 @@ export default function AddSectionButton({
           onClick={() => setOpen(true)}
           className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-neutral-800 py-3 text-sm text-neutral-500 hover:border-neutral-600 hover:text-neutral-300"
         >
-          <span className="text-lg leading-none text-[var(--accent)]">+</span> Add section
+          <span className="text-lg leading-none text-[var(--accent)]">+</span> Add a Tool
         </button>
       )}
     </div>

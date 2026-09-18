@@ -12,20 +12,34 @@ import StarterKit from "@tiptap/starter-kit";
 import { Markdown } from "@tiptap/markdown";
 import { Placeholder } from "@tiptap/extensions";
 import { TaskItem, TaskList } from "@tiptap/extension-list";
+import { Fragment, Slice } from "@tiptap/pm/model";
 import { TextSelection } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
+import { useAnchoredPanel } from "@/components/ui/Popover";
 import { TOOLBAR_ICONS } from "./toolbar-icons";
 import { useKeyboardInset } from "./useKeyboardInset";
 import { useIsDesktop } from "./useIsDesktop";
 import { useRouter } from "next/navigation";
+import { openItem } from "@/lib/item-nav";
+import { showToast } from "@/components/ui/ActionToast";
 import {
+  ATTACHMENT_REMOVED_EVENT,
+  FILE_DRAG_MIME,
+  type AttachmentRemovedDetail,
+  type FileDragPayload,
+} from "@/components/attachments/upload";
+import {
+  ACCENT_HIGHLIGHT,
+  ACCENT_HIGHLIGHT_BG,
   BLOCKNOTE_COLORS,
   type BlockNoteColor,
+  type HighlightColor,
 } from "@/lib/colors";
 import {
   EmptyListItemFix,
+  FootnoteMarkdownFix,
   Highlight,
   LedgrImage,
   LedgrMention,
@@ -33,6 +47,7 @@ import {
   LedgrTable,
   ListBackspaceJoin,
   MarkdownEscapeFix,
+  OrderedListTextFix,
   SlideMark,
   TableCell,
   TableHeader,
@@ -53,7 +68,11 @@ import {
   CollapsibleHeadings,
   setHeadingsCollapsible,
 } from "./collapsible-headings";
-import { SlashCommands, setSlashToggleEnabled } from "./slash-suggestion";
+import {
+  SlashCommands,
+  setSlashFilePicker,
+  setSlashToggleEnabled,
+} from "./slash-suggestion";
 import { mentionStorage, type MentionStorage } from "./mention-node-view";
 import { collectMentionIdsFromMarkdown } from "@/lib/editor/mention-markdown";
 import type { ResolvedMention } from "@/lib/mentions";
@@ -76,9 +95,10 @@ import {
   setComment,
 } from "./comment-mark";
 import { extractPromotable } from "@/lib/editor/block-anchor";
+import { withShortcut } from "@/lib/editor/shortcuts";
 import { deskSendAvailable, openDeskSendMenu } from "@/lib/desk/send";
 import CommentPopover from "./CommentPopover";
-import PromoteLinePopup, { type PromoteDraft } from "./PromoteLinePopup";
+import PromoteLinePopup from "./PromoteLinePopup";
 import "./markdown-editor.css";
 
 export type MarkdownEditorProps = {
@@ -90,10 +110,12 @@ export type MarkdownEditorProps = {
   // Optional: hands the live editor up once ready, so a host can drive
   // imperative inserts (e.g. the Changelog notes "Sign" stamp). No-op when unset.
   onEditorReady?: (editor: Editor) => void;
-  // Optional: upload an image file (paste/drop/button) and resolve its public
-  // URL. When unset, image insertion is disabled — controlled hosts with no
-  // backing item (scratch route, Changelog notes) pass nothing.
-  uploadImage?: (file: File) => Promise<string>;
+  // Optional: upload a file (paste/drop/button/"/file") and resolve its stable
+  // /files/<id> URL. Images embed where they land; any other file type inserts
+  // as a plain markdown link on its filename. When unset, all file insertion is
+  // disabled — controlled hosts with no backing item (scratch route, Changelog
+  // notes) pass nothing.
+  uploadFile?: (file: File) => Promise<string>;
   // When set (meetings, ADR-090): enable the per-line "→ task" promote
   // affordance, posting to this meeting's promote endpoint.
   promoteToMeetingId?: string;
@@ -103,6 +125,13 @@ export type MarkdownEditorProps = {
   // blockRef → the task it was promoted to (ADR-090): shows a "✓ task" badge on
   // those lines instead of the promote button, and links to the task.
   promotedRefs?: PromotedRefs;
+  // Papers only: keep `[^id]` footnote markers and their definitions out of the
+  // serializer's backslash-escaping, so a citation survives a save on the rich
+  // surface. Footnotes are not in the shared dialect (they are hand-parsed by the
+  // Papers module and its .docx renderer), so this is OPT-IN — an ordinary note
+  // must keep treating `\[^…\]` as the literal text the owner typed. See
+  // FootnoteMarkdownFix in extensions.ts.
+  preserveFootnotes?: boolean;
   // Controlled visibility of the formatting bar on desktop (S5): the collapse
   // toggle now lives in BodyEditor's mode-row, which owns this state (and its
   // per-item persistence). When false the bar renders NOTHING on desktop (zero
@@ -138,17 +167,85 @@ export type MarkdownEditorProps = {
 
 const COLOR_NAMES = Object.keys(BLOCKNOTE_COLORS) as BlockNoteColor[];
 
-// Pull image files out of a paste/drop payload (ignore non-images so text and
-// markdown paste fall through to Tiptap's normal handling).
-function imageFilesFrom(data: DataTransfer | null): File[] {
+// Pull files out of a paste/drop payload (any type — a payload with no files,
+// i.e. ordinary text/markdown paste, falls through to Tiptap's normal handling).
+function filesFrom(data: DataTransfer | null): File[] {
   if (!data) return [];
-  return Array.from(data.files).filter((f) => f.type.startsWith("image/"));
+  return Array.from(data.files);
 }
 
-// Upload each image and drop it in at the current selection. Sequential so
-// multiple pasted images keep their order; the selection advances past each
-// inserted node, so the next one lands after it.
-async function insertUploadedImages(
+// Insert a linked filename at the current selection, trailing space included —
+// the space keeps back-to-back inserts from fusing into one link and gives the
+// caret a mark-free spot to keep typing from. Shared by fresh uploads and by
+// an existing file row dragged in from the Files panel.
+function insertFileLink(view: EditorView, label: string, url: string): void {
+  const linkMark = view.state.schema.marks.link;
+  if (!linkMark) return;
+  const frag = Fragment.from([
+    view.state.schema.text(label || "file", [linkMark.create({ href: url })]),
+    view.state.schema.text(" "),
+  ]);
+  view.dispatch(
+    view.state.tr.replaceSelection(new Slice(frag, 0, 0)).scrollIntoView()
+  );
+}
+
+// When a file is DELETED (the Files panel/section, Build → Files), its
+// references in the live doc would keep rendering as links — and worse, an
+// unsaved body would resurrect them over the server-side scrub on its next
+// autosave. So the editor scrubs its own document: link marks pointing at the
+// file unlink to their text plus a "(file deleted)" note, embedded images
+// become the note alone. The owner's words are never deleted (Tyler,
+// 2026-08-29); the resulting transaction autosaves like any edit.
+function scrubDeletedFile(editor: Editor, attachmentId: string): void {
+  const { state } = editor.view;
+  const { doc, schema } = state;
+  const hits: { from: number; to: number; kind: "link" | "image" }[] = [];
+  doc.descendants((node, pos) => {
+    if (
+      node.type === schema.nodes.image &&
+      typeof node.attrs.src === "string" &&
+      node.attrs.src.includes(attachmentId)
+    ) {
+      hits.push({ from: pos, to: pos + node.nodeSize, kind: "image" });
+      return false;
+    }
+    if (node.isText) {
+      const linked = node.marks.some(
+        (m) =>
+          m.type === schema.marks.link &&
+          typeof m.attrs.href === "string" &&
+          m.attrs.href.includes(attachmentId)
+      );
+      if (linked) hits.push({ from: pos, to: pos + node.nodeSize, kind: "link" });
+    }
+    return true;
+  });
+  if (hits.length === 0) return;
+  let tr = state.tr;
+  // Back to front, so earlier positions stay valid as later spans change.
+  for (const h of hits.sort((a, b) => b.from - a.from)) {
+    try {
+      if (h.kind === "image") {
+        tr = tr.replaceWith(h.from, h.to, schema.text("(file deleted)"));
+      } else {
+        tr = tr.insertText(" (file deleted)", h.to);
+        tr = tr.removeMark(h.from, h.to, schema.marks.link);
+      }
+    } catch {
+      // A span the schema won't take the edit on (e.g. a block-position image):
+      // leave it rather than corrupt the doc; the server scrub still ran.
+    }
+  }
+  editor.view.dispatch(tr);
+}
+
+// Upload each file and drop it in at the current selection: images embed as
+// image nodes, everything else inserts as a markdown link on its filename
+// (the stable /files/<id> address). Sequential so multiple pasted files keep
+// their order; the selection advances past each inserted node, so the next one
+// lands after it.
+async function insertUploadedFiles(
   view: EditorView,
   files: File[],
   upload: (file: File) => Promise<string>
@@ -156,13 +253,22 @@ async function insertUploadedImages(
   for (const file of files) {
     try {
       const url = await upload(file);
-      const imageType = view.state.schema.nodes.image;
-      if (!imageType) continue;
-      const alt = (file.name || "").replace(/\.[^.]+$/, "");
-      const node = imageType.create({ src: url, alt });
-      view.dispatch(view.state.tr.replaceSelectionWith(node).scrollIntoView());
+      const { schema } = view.state;
+      if (file.type.startsWith("image/")) {
+        const imageType = schema.nodes.image;
+        if (!imageType) continue;
+        const alt = (file.name || "").replace(/\.[^.]+$/, "");
+        const node = imageType.create({ src: url, alt });
+        view.dispatch(view.state.tr.replaceSelectionWith(node).scrollIntoView());
+        continue;
+      }
+      insertFileLink(view, file.name, url);
     } catch (err) {
-      console.error("image upload failed", err);
+      // Say so on screen, not just in the console — a swallowed failure here
+      // reads as "I picked a file and nothing happened" (Tyler, 2026-08-29,
+      // against a preview with no R2 vars).
+      console.error("file upload failed", err);
+      showToast(err instanceof Error ? err.message : "File upload failed");
     }
   }
 }
@@ -208,6 +314,199 @@ function toolbarBtnClass(active?: boolean, disabled?: boolean) {
   }`;
 }
 
+// A swatch's face: the color's text stroke for the "color" kind, its highlight
+// fill for the "highlight" kind, and the owner's live accent for the accent.
+function swatchHex(kind: "color" | "highlight", c: HighlightColor) {
+  if (c === ACCENT_HIGHLIGHT) return ACCENT_HIGHLIGHT_BG;
+  return kind === "color"
+    ? BLOCKNOTE_COLORS[c].text
+    : BLOCKNOTE_COLORS[c].background;
+}
+
+// Roughly how wide the open panel is, per kind: ten 24px swatches plus the clear
+// button, the divider, gaps and padding. Only feeds the viewport CLAMP below, and
+// over-estimating is the safe direction (it pulls the panel further inside), so
+// this doesn't have to track the layout to the pixel.
+const SWATCH_PANEL_W = { color: 300, highlight: 344 } as const;
+
+// The text-color / highlight picker: a toolbar button that opens a row of
+// swatches (ADR-155).
+//
+// A COMPONENT rather than the render helper this used to be, because it needs
+// useAnchoredPanel and the two pickers are each rendered conditionally on the
+// owner's toolbar config — a hook called from a helper invoked behind two
+// separate conditions is a hook-order bug waiting to happen.
+//
+// The panel is portaled and fixed-positioned rather than `absolute right-0`
+// (Tyler, 2026-09-09, screenshot): with the window pushed against the right edge
+// of the monitor, the row opened off-screen and the last colors were simply
+// unreachable. Adding the tenth accent swatch made a narrow miss into an obvious
+// one. `useAnchoredPanel` (the placement half of ui/Popover, exported for exactly
+// this) clamps into the viewport on both edges and flips above the button when
+// there's no room below, so no window position can hide a color.
+//
+// NOT ui/Popover itself, though the panel is now equivalent: that component owns
+// its trigger button and doesn't preventDefault on mousedown, which in an editor
+// toolbar blurs the document and throws away the selection being highlighted.
+function SwatchControl({
+  kind,
+  current,
+  onPick,
+  open,
+  onToggle,
+  isDesktop,
+}: {
+  kind: "color" | "highlight";
+  current: string;
+  onPick: (c: HighlightColor | null) => void;
+  open: boolean;
+  onToggle: () => void;
+  isDesktop: boolean;
+}) {
+  const { anchorRef, coords } = useAnchoredPanel<HTMLButtonElement>(
+    open,
+    SWATCH_PANEL_W[kind],
+    "right"
+  );
+  const title = kind === "color" ? "Text color" : "Highlight";
+
+  // Mobile: the formatting bar is a horizontally-scrolling strip pinned above
+  // the keyboard, so an absolutely-positioned popover would be clipped by the
+  // scroll container (overflow-x:auto forces overflow-y:auto) and would open
+  // down into the keyboard. Fall back to a native <select> — the OS picker is
+  // unclipped, keyboard-safe, and idiomatic on touch. Desktop gets the swatch
+  // popover below.
+  if (!isDesktop) {
+    return (
+      <select
+        title={title}
+        aria-label={title}
+        className="h-7 rounded-md bg-surface-2 px-1 text-sm text-ink-muted"
+        value={current}
+        onChange={(e) => onPick((e.target.value || null) as HighlightColor | null)}
+      >
+        <option value="">{title}</option>
+        {COLOR_NAMES.map((c) => (
+          <option key={c} value={c}>{c}</option>
+        ))}
+        {kind === "highlight" && (
+          <option value={ACCENT_HIGHLIGHT}>my highlight</option>
+        )}
+      </select>
+    );
+  }
+
+  const pick = (c: HighlightColor | null) => {
+    onPick(c);
+    onToggle();
+  };
+
+  return (
+    <>
+      <button
+        ref={anchorRef}
+        type="button"
+        title={title}
+        aria-label={title}
+        aria-haspopup="true"
+        aria-expanded={open}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onToggle}
+        className={toolbarBtnClass(open || !!current)}
+      >
+        <span className="flex items-center gap-1">
+          {kind === "color" ? (
+            <span className="text-sm font-semibold leading-none">A</span>
+          ) : (
+            <span className="[&>svg]:h-3.5 [&>svg]:w-3.5">{TOOLBAR_ICONS.highlight}</span>
+          )}
+          <span
+            className="h-1 w-3.5 rounded-full"
+            style={{
+              backgroundColor: current
+                ? swatchHex(kind, current as HighlightColor)
+                : "var(--line-strong, #444)",
+              backgroundImage:
+                current === ACCENT_HIGHLIGHT
+                  ? "var(--accent-highlight-image, none)"
+                  : undefined,
+            }}
+          />
+        </span>
+      </button>
+      {open &&
+        coords &&
+        createPortal(
+          <>
+            <div
+              className="fixed inset-0 z-[55]"
+              onMouseDown={onToggle}
+            />
+            <div
+              role="dialog"
+              aria-label={title}
+              style={{ position: "fixed", left: coords.left, top: coords.top, bottom: coords.bottom }}
+              className="z-[60] flex w-max items-center gap-1 rounded-card border border-line bg-surface-3 p-1.5 shadow-lg"
+            >
+              <button
+                type="button"
+                title="None"
+                aria-label="No color"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => pick(null)}
+                className="flex h-6 w-6 items-center justify-center rounded text-xs text-ink-subtle ring-1 ring-line hover:text-ink"
+              >
+                ✕
+              </button>
+              {COLOR_NAMES.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  title={c}
+                  aria-label={c}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => pick(c)}
+                  className={`h-6 w-6 rounded ring-1 ring-line ${
+                    current === c ? "ring-2 ring-ink" : ""
+                  }`}
+                  style={{ backgroundColor: swatchHex(kind, c) }}
+                />
+              ))}
+              {/* The owner's own accent as a tenth highlight ("My highlight").
+                  Highlight-only: an accent TEXT color is a different thing and
+                  wasn't asked for. Separated by a divider because it isn't one
+                  of the nine literals — it tracks the accent in settings, so
+                  this swatch changes color when that does. Labeled, per the
+                  scope-the-UI rule: an unexplained tenth swatch reads as a bug. */}
+              {kind === "highlight" && (
+                <>
+                  <span aria-hidden className="mx-0.5 h-5 w-px bg-line" />
+                  <button
+                    type="button"
+                    title="My highlight (your accent color from Settings)"
+                    aria-label="My highlight"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => pick(ACCENT_HIGHLIGHT)}
+                    className={`h-6 w-6 rounded ring-1 ring-line ${
+                      current === ACCENT_HIGHLIGHT ? "ring-2 ring-ink" : ""
+                    }`}
+                    style={{
+                      backgroundColor: ACCENT_HIGHLIGHT_BG,
+                      // A gradient accent shows as a gradient here too; layout.tsx
+                      // sets this var only when the owner picked one.
+                      backgroundImage: "var(--accent-highlight-image, none)",
+                    }}
+                  />
+                </>
+              )}
+            </div>
+          </>,
+          document.body
+        )}
+    </>
+  );
+}
+
 // A viewport rect → coordinates inside `wrap` (which must be position:relative).
 // The comment panel positions this way rather than with fixed viewport coords so
 // it scrolls with the note instead of detaching from the comment it belongs to.
@@ -227,6 +526,7 @@ function ToolbarButton({
   disabled,
   onClick,
   title,
+  keys,
 }: {
   label?: string;
   icon?: ReactNode;
@@ -234,11 +534,15 @@ function ToolbarButton({
   disabled?: boolean;
   onClick: () => void;
   title: string;
+  // A Tiptap shortcut spec ("Mod-b"); appended to the tooltip as "Bold (⌘B)"
+  // in the notation of the keyboard you're on. aria-label keeps the plain
+  // label — a screen reader shouldn't read out "open paren command B".
+  keys?: string;
 }) {
   return (
     <button
       type="button"
-      title={title}
+      title={withShortcut(title, keys)}
       aria-label={title}
       disabled={disabled}
       onMouseDown={(e) => e.preventDefault()}
@@ -255,10 +559,11 @@ export default function MarkdownEditor({
   initialMarkdown,
   onChange,
   onEditorReady,
-  uploadImage,
+  uploadFile,
   promoteToMeetingId,
   onRequestSave,
   promotedRefs,
+  preserveFootnotes = false,
   toolbarOpen = true,
   viewControls,
   compact = false,
@@ -266,13 +571,16 @@ export default function MarkdownEditor({
   autoFocus = false,
   focusSignal = 0,
 }: MarkdownEditorProps) {
-  // onChange and uploadImage are kept in refs so the editor's once-bound
+  // onChange and uploadFile are kept in refs so the editor's once-bound
   // callbacks (onUpdate, the paste/drop handlers) always see the latest props
   // without re-creating the editor. Synced in an effect, not during render.
   const onChangeRef = useRef(onChange);
-  const uploadRef = useRef(uploadImage);
+  const uploadRef = useRef(uploadFile);
   const onRequestSaveRef = useRef(onRequestSave);
+  // Two hidden pickers: the Image button's (image/* only) and the any-file one
+  // behind the Attach button + the "/file" slash command.
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const anyFileInputRef = useRef<HTMLInputElement>(null);
   const router = useRouter();
   // The promote popup's draft, or null when closed (ADR-090).
   const [promote, setPromote] = useState<{
@@ -325,7 +633,7 @@ export default function MarkdownEditor({
   const wrapRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     onChangeRef.current = onChange;
-    uploadRef.current = uploadImage;
+    uploadRef.current = uploadFile;
     onRequestSaveRef.current = onRequestSave;
   });
 
@@ -360,6 +668,10 @@ export default function MarkdownEditor({
       // backslash-escaped, which otherwise compounded on every rich⇄source flip.
       // See MarkdownEscapeFix in extensions.ts.
       MarkdownEscapeFix,
+      // Papers only (opt-in): the same manager-patching discipline, undoing the
+      // escaping on `[^id]` footnote markers so a citation survives a save. Off
+      // by default so an ordinary note keeps `\[^…\]` as literal typed text.
+      ...(preserveFootnotes ? [FootnoteMarkdownFix] : []),
       // Also right after Markdown (same manager-patching discipline): keeps an
       // empty bullet from being read as a setext heading underline, in both
       // directions. See EmptyListItemFix / spaceEmptyListItems.
@@ -378,6 +690,10 @@ export default function MarkdownEditor({
       // outdenting (see ListBackspaceJoin). After the list extensions, but the
       // extension's own priority is what actually beats ListKeymap.
       ListBackspaceJoin,
+      // Inline HTML dialect marks (span/mark/ins.slide) survive inside an ORDERED
+      // list item, matching a bullet item (see OrderedListTextFix in extensions.ts
+      // for the upstream @tiptap/extension-list bug this works around).
+      OrderedListTextFix,
       // Block anchors (ADR-090): dim trailing ^id markers + the jump-to/ensure
       // primitives the action-item → task promotion rides on. The per-line
       // "→ task" widget shows only when a meeting wired the promote path; a
@@ -442,36 +758,55 @@ export default function MarkdownEditor({
     contentType: "markdown",
     editorProps: {
       attributes: { class: compact ? "ProseMirror ledgr-prose ledgr-prose-compact" : "ProseMirror ledgr-prose" },
-      // Paste/drop of image files → upload to R2, insert as a markdown image.
-      // Only intercepts when an image is actually present and an uploader is
-      // wired; everything else falls through to normal (markdown) paste.
+      // Paste/drop of files → upload to R2; images embed, anything else inserts
+      // as a link (insertUploadedFiles). Only intercepts when a file is actually
+      // present and an uploader is wired; everything else falls through to
+      // normal (markdown) paste.
       handlePaste: (view, event) => {
         const upload = uploadRef.current;
         if (!upload) return false;
-        const files = imageFilesFrom(event.clipboardData);
+        const files = filesFrom(event.clipboardData);
         if (files.length === 0) return false;
         event.preventDefault();
-        void insertUploadedImages(view, files, upload);
+        void insertUploadedFiles(view, files, upload);
         return true;
       },
       handleDrop: (view, event) => {
+        const setDropSelection = () => {
+          const coords = view.posAtCoords({
+            left: event.clientX,
+            top: event.clientY,
+          });
+          if (coords) {
+            view.dispatch(
+              view.state.tr.setSelection(
+                TextSelection.create(view.state.doc, coords.pos)
+              )
+            );
+          }
+        };
+        // A row dragged in from the Files panel: link the EXISTING attachment
+        // where it lands — no re-upload, no raw URL text (Tyler, 2026-08-29).
+        const existing = event.dataTransfer?.getData(FILE_DRAG_MIME);
+        if (existing) {
+          event.preventDefault();
+          try {
+            const { id, filename } = JSON.parse(existing) as FileDragPayload;
+            if (typeof id !== "string" || !id) return true;
+            setDropSelection();
+            insertFileLink(view, String(filename ?? "file"), `/files/${id}`);
+          } catch {
+            // Malformed payload: swallow the drop rather than paste raw JSON.
+          }
+          return true;
+        }
         const upload = uploadRef.current;
         if (!upload) return false;
-        const files = imageFilesFrom(event.dataTransfer);
+        const files = filesFrom(event.dataTransfer);
         if (files.length === 0) return false;
         event.preventDefault();
-        const coords = view.posAtCoords({
-          left: event.clientX,
-          top: event.clientY,
-        });
-        if (coords) {
-          view.dispatch(
-            view.state.tr.setSelection(
-              TextSelection.create(view.state.doc, coords.pos)
-            )
-          );
-        }
-        void insertUploadedImages(view, files, upload);
+        setDropSelection();
+        void insertUploadedFiles(view, files, upload);
         return true;
       },
     },
@@ -617,7 +952,18 @@ export default function MarkdownEditor({
     const resolve = async () => {
       const store = mentionStorage(editor) as MentionStorage | undefined;
       if (!store) return;
-      const ids = collectMentionIdsFromMarkdown(editor.getMarkdown());
+      // Fall back to the INCOMING body while the editor is still empty. The
+      // editor is constructed with `content: ""` and the body arrives in a later
+      // effect via setContent with emitUpdate:false (see below), so on mount this
+      // ran against an empty doc, found no ids, and the "update" listener that
+      // would retry never fired, because loading deliberately isn't an edit.
+      // Every chip therefore wore the unresolved fallback glyph until the user
+      // typed something, and wore it again on the next visit (Tyler, 2026-09-14).
+      // The chips mount before this fetch returns either way; the rerender pass
+      // below is what paints them, so reading the id set early is safe.
+      const ids = collectMentionIdsFromMarkdown(
+        editor.getMarkdown() || initialMarkdown
+      );
       if (ids.length === 0) {
         store.resolved = new Map();
         store.ready = true;
@@ -648,7 +994,9 @@ export default function MarkdownEditor({
       if (timer) clearTimeout(timer);
       editor.off("update", schedule);
     };
-  }, [editor]);
+    // initialMarkdown is a dependency so a host swapping in a different document
+    // ("reload from saved") re-resolves its mentions too, for the same reason.
+  }, [editor, initialMarkdown]);
 
   // A "✓ task" badge (or any deep link to a line) fires ledgr-open-item; navigate
   // there with the SPA router rather than a full reload.
@@ -657,7 +1005,7 @@ export default function MarkdownEditor({
     const dom = editor.view.dom;
     const handler = (e: Event) => {
       const itemId = (e as CustomEvent<{ itemId: string }>).detail?.itemId;
-      if (itemId) router.push(`/items/${itemId}`);
+      if (itemId) openItem(router, itemId);
     };
     dom.addEventListener(OPEN_ITEM_EVENT, handler);
     return () => dom.removeEventListener(OPEN_ITEM_EVENT, handler);
@@ -780,6 +1128,30 @@ export default function MarkdownEditor({
       if (editor) setHeadingsCollapsible(editor, s.collapsibleHeadings);
     });
   }, [editor]);
+  // Register the "/file" slash command's picker for THIS editor instance (a
+  // WeakMap entry in slash-suggestion, so it can't outlive the editor). Gated on
+  // the uploader being wired, same as the toolbar's insert buttons. Keyed on
+  // presence, not identity — hosts pass inline arrows that change every render.
+  const hasUploader = !!uploadFile;
+  useEffect(() => {
+    if (!editor) return;
+    setSlashFilePicker(
+      editor,
+      hasUploader ? () => anyFileInputRef.current?.click() : null
+    );
+    return () => setSlashFilePicker(editor, null);
+  }, [editor, hasUploader]);
+  // Scrub deleted files out of the live doc (see scrubDeletedFile above).
+  useEffect(() => {
+    if (!editor || !itemId) return;
+    const onRemoved = (e: Event) => {
+      const d = (e as CustomEvent<AttachmentRemovedDetail>).detail;
+      if (d.itemId === itemId) scrubDeletedFile(editor, d.id);
+    };
+    window.addEventListener(ATTACHMENT_REMOVED_EVENT, onRemoved as EventListener);
+    return () =>
+      window.removeEventListener(ATTACHMENT_REMOVED_EVENT, onRemoved as EventListener);
+  }, [editor, itemId]);
   const showTb = (id: string) => !hiddenTb.has(id);
   // Collapse is a DESKTOP affordance only (the toggle lives in BodyEditor's
   // mode-row). On mobile the toolbar floats over the keyboard and must always
@@ -834,13 +1206,18 @@ export default function MarkdownEditor({
     );
   }
 
-  const setColor = (color: BlockNoteColor | null) => {
+  // Takes the wider HighlightColor because it shares `SwatchControl` with the
+  // highlight picker. The accent is a highlight-only value, and that picker
+  // renders its swatch only for kind === "highlight", so it can't arrive here;
+  // the guard makes that explicit rather than silently setting a bad attribute.
+  const setColor = (color: HighlightColor | null) => {
+    if (color === ACCENT_HIGHLIGHT) return;
     const chain = editor.chain().focus();
     if (color) chain.setMark("textColor", { color }).run();
     else chain.unsetMark("textColor").run();
   };
 
-  const setHighlight = (color: BlockNoteColor | null) => {
+  const setHighlight = (color: HighlightColor | null) => {
     const chain = editor.chain().focus();
     if (color) chain.setMark("highlight", { color }).run();
     else chain.unsetMark("highlight").run();
@@ -864,109 +1241,6 @@ export default function MarkdownEditor({
   // (ADR-155). Replaces the OS-native <select>s, which read as foreign chrome
   // in the toolbar. `hex` is the color's text stroke for the "color" kind and
   // its highlight fill for the "highlight" kind.
-  const swatchHex = (kind: "color" | "highlight", c: BlockNoteColor) =>
-    kind === "color" ? BLOCKNOTE_COLORS[c].text : BLOCKNOTE_COLORS[c].background;
-  const swatchControl = (
-    kind: "color" | "highlight",
-    current: string,
-    onPick: (c: BlockNoteColor | null) => void
-  ) => {
-    const open = openSwatch === kind;
-    const title = kind === "color" ? "Text color" : "Highlight";
-    // Mobile: the formatting bar is a horizontally-scrolling strip pinned above
-    // the keyboard, so an absolutely-positioned popover would be clipped by the
-    // scroll container (overflow-x:auto forces overflow-y:auto) and would open
-    // down into the keyboard. Fall back to a native <select> — the OS picker is
-    // unclipped, keyboard-safe, and idiomatic on touch. Desktop gets the swatch
-    // popover below.
-    if (!isDesktop) {
-      return (
-        <select
-          title={title}
-          aria-label={title}
-          className="h-7 rounded-md bg-surface-2 px-1 text-sm text-ink-muted"
-          value={current}
-          onChange={(e) => onPick((e.target.value || null) as BlockNoteColor | null)}
-        >
-          <option value="">{title}</option>
-          {COLOR_NAMES.map((c) => (
-            <option key={c} value={c}>{c}</option>
-          ))}
-        </select>
-      );
-    }
-    return (
-      <div className="relative">
-        <button
-          type="button"
-          title={title}
-          aria-label={title}
-          aria-haspopup="true"
-          aria-expanded={open}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => setOpenSwatch(open ? null : kind)}
-          className={toolbarBtnClass(open || !!current)}
-        >
-          <span className="flex items-center gap-1">
-            {kind === "color" ? (
-              <span className="text-sm font-semibold leading-none">A</span>
-            ) : (
-              <span className="[&>svg]:h-3.5 [&>svg]:w-3.5">{TOOLBAR_ICONS.highlight}</span>
-            )}
-            <span
-              className="h-1 w-3.5 rounded-full"
-              style={{
-                backgroundColor: current
-                  ? swatchHex(kind, current as BlockNoteColor)
-                  : "var(--line-strong, #444)",
-              }}
-            />
-          </span>
-        </button>
-        {open && (
-          <>
-            <div
-              className="fixed inset-0 z-40"
-              onMouseDown={() => setOpenSwatch(null)}
-            />
-            <div className="absolute right-0 top-full z-50 mt-1 flex w-max items-center gap-1 rounded-card border border-line bg-surface-3 p-1.5 shadow-lg sm:left-0 sm:right-auto">
-              <button
-                type="button"
-                title="None"
-                aria-label="No color"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => {
-                  onPick(null);
-                  setOpenSwatch(null);
-                }}
-                className="flex h-6 w-6 items-center justify-center rounded text-xs text-ink-subtle ring-1 ring-line hover:text-ink"
-              >
-                ✕
-              </button>
-              {COLOR_NAMES.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  title={c}
-                  aria-label={c}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    onPick(c);
-                    setOpenSwatch(null);
-                  }}
-                  className={`h-6 w-6 rounded ring-1 ring-line ${
-                    current === c ? "ring-2 ring-ink" : ""
-                  }`}
-                  style={{ backgroundColor: swatchHex(kind, c) }}
-                />
-              ))}
-            </div>
-          </>
-        )}
-      </div>
-    );
-  };
-
   // List nesting (the mobile Tab-key replacement). Bullet/ordered lists nest
   // their `listItem`; the GFM checklist nests `taskItem` (configured nested:true
   // above). Pick the node type from the active list so one pair of buttons
@@ -982,29 +1256,19 @@ export default function MarkdownEditor({
       ? editor.chain().focus().liftListItem("taskItem").run()
       : editor.chain().focus().liftListItem("listItem").run();
 
-  // Create the task from the popup draft (ADR-090): flush the body save so the
-  // anchor is persisted, POST the promotion, then refresh so the new task shows
-  // in the prep panel and the promoted line gets its badge.
-  const submitPromote = async (draft: PromoteDraft) => {
-    const meetingId = promoteToMeetingId;
-    const blockRef = promote?.blockId;
-    if (!meetingId) return;
-    setPromote(null);
-    try {
-      await onRequestSaveRef.current?.();
-      await fetch(`/api/items/${meetingId}/promote-task`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: draft.title, body: draft.body, blockRef }),
-      });
-      router.refresh();
-    } catch (err) {
-      console.error("promote failed", err);
-    }
+  // The popup owns the create now (it renders the ordinary task capture card, so
+  // the line's shorthand is parsed like any typed capture). This still flushes
+  // the body save first, so the line's ^id anchor is persisted before the task
+  // points at it; the card refreshes on its own once the task lands, which is
+  // what gives the promoted line its badge.
+  const flushBeforePromote = async () => {
+    await onRequestSaveRef.current?.();
   };
 
   // Open the hidden file picker behind the toolbar's Image button.
   const openImagePicker = () => fileInputRef.current?.click();
+  // And the any-file one behind the Attach button + the "/file" slash command.
+  const openFilePicker = () => anyFileInputRef.current?.click();
 
   // Open the hyperlink editor, prefilled with the current link's href if the
   // cursor sits inside one (so the button edits rather than stacks links).
@@ -1106,35 +1370,38 @@ export default function MarkdownEditor({
   // long run of icons reads in chunks instead of one undifferentiated strip. A
   // group with every button hidden (per-button visibility / feature gates) drops
   // out, and its separator with it.
-  type Btn = { id: string; title: string; icon?: ReactNode; label?: string; active?: boolean; disabled?: boolean; when?: boolean; run: () => void };
+  // `keys` is the button's Tiptap keyboard shortcut, shown in its tooltip
+  // (see @/lib/editor/shortcuts). It is display only: the binding itself lives
+  // in the extension, so a button without one simply shows no shortcut.
+  type Btn = { id: string; title: string; keys?: string; icon?: ReactNode; label?: string; active?: boolean; disabled?: boolean; when?: boolean; run: () => void };
   const groups: Btn[][] = [
     // Undo/redo lead the bar: leftmost is the one spot that stays visible on a
     // phone, where the bar scrolls sideways and there is no Ctrl+Z. One settings
     // id ("undo") hides the pair.
     [
-      { id: "undo", title: "Undo", icon: TOOLBAR_ICONS.undo, disabled: !toolbar.canUndo, run: () => editor.chain().focus().undo().run() },
-      { id: "undo", title: "Redo", icon: TOOLBAR_ICONS.redo, disabled: !toolbar.canRedo, run: () => editor.chain().focus().redo().run() },
+      { id: "undo", title: "Undo", keys: "Mod-z", icon: TOOLBAR_ICONS.undo, disabled: !toolbar.canUndo, run: () => editor.chain().focus().undo().run() },
+      { id: "undo", title: "Redo", keys: "Shift-Mod-z", icon: TOOLBAR_ICONS.redo, disabled: !toolbar.canRedo, run: () => editor.chain().focus().redo().run() },
     ],
     [
-      { id: "bold", title: "Bold", icon: TOOLBAR_ICONS.bold, active: toolbar.isBold, run: () => editor.chain().focus().toggleBold().run() },
-      { id: "italic", title: "Italic", icon: TOOLBAR_ICONS.italic, active: toolbar.isItalic, run: () => editor.chain().focus().toggleItalic().run() },
-      { id: "underline", title: "Underline", icon: TOOLBAR_ICONS.underline, active: toolbar.isUnderline, run: () => editor.chain().focus().toggleUnderline().run() },
-      { id: "strike", title: "Strikethrough", icon: TOOLBAR_ICONS.strike, active: toolbar.isStrike, run: () => editor.chain().focus().toggleStrike().run() },
+      { id: "bold", title: "Bold", keys: "Mod-b", icon: TOOLBAR_ICONS.bold, active: toolbar.isBold, run: () => editor.chain().focus().toggleBold().run() },
+      { id: "italic", title: "Italic", keys: "Mod-i", icon: TOOLBAR_ICONS.italic, active: toolbar.isItalic, run: () => editor.chain().focus().toggleItalic().run() },
+      { id: "underline", title: "Underline", keys: "Mod-u", icon: TOOLBAR_ICONS.underline, active: toolbar.isUnderline, run: () => editor.chain().focus().toggleUnderline().run() },
+      { id: "strike", title: "Strikethrough", keys: "Mod-Shift-s", icon: TOOLBAR_ICONS.strike, active: toolbar.isStrike, run: () => editor.chain().focus().toggleStrike().run() },
     ],
     [
-      { id: "h1", title: "Heading 1", label: "H1", active: toolbar.isH1, run: () => editor.chain().focus().toggleHeading({ level: 1 }).run() },
-      { id: "h2", title: "Heading 2", label: "H2", active: toolbar.isH2, run: () => editor.chain().focus().toggleHeading({ level: 2 }).run() },
+      { id: "h1", title: "Heading 1", keys: "Mod-Alt-1", label: "H1", active: toolbar.isH1, run: () => editor.chain().focus().toggleHeading({ level: 1 }).run() },
+      { id: "h2", title: "Heading 2", keys: "Mod-Alt-2", label: "H2", active: toolbar.isH2, run: () => editor.chain().focus().toggleHeading({ level: 2 }).run() },
     ],
     [
-      { id: "bulletList", title: "Bullet list", icon: TOOLBAR_ICONS.bulletList, active: toolbar.isBulletList, run: () => editor.chain().focus().toggleBulletList().run() },
-      { id: "orderedList", title: "Numbered list", icon: TOOLBAR_ICONS.orderedList, active: toolbar.isOrderedList, run: () => editor.chain().focus().toggleOrderedList().run() },
-      { id: "tasks", title: "Checklist (- [ ])", icon: TOOLBAR_ICONS.tasks, active: toolbar.isTaskList, run: () => editor.chain().focus().toggleTaskList().run() },
-      { id: "outdent", title: "Outdent (un-nest list item)", icon: TOOLBAR_ICONS.outdent, disabled: !inList, run: outdent },
-      { id: "indent", title: "Indent (nest list item)", icon: TOOLBAR_ICONS.indent, disabled: !inList, run: indent },
+      { id: "bulletList", title: "Bullet list", keys: "Mod-Shift-8", icon: TOOLBAR_ICONS.bulletList, active: toolbar.isBulletList, run: () => editor.chain().focus().toggleBulletList().run() },
+      { id: "orderedList", title: "Numbered list", keys: "Mod-Shift-7", icon: TOOLBAR_ICONS.orderedList, active: toolbar.isOrderedList, run: () => editor.chain().focus().toggleOrderedList().run() },
+      { id: "tasks", title: "Checklist (- [ ])", keys: "Mod-Shift-9", icon: TOOLBAR_ICONS.tasks, active: toolbar.isTaskList, run: () => editor.chain().focus().toggleTaskList().run() },
+      { id: "outdent", title: "Outdent (un-nest list item)", keys: "Shift-Tab", icon: TOOLBAR_ICONS.outdent, disabled: !inList, run: outdent },
+      { id: "indent", title: "Indent (nest list item)", keys: "Tab", icon: TOOLBAR_ICONS.indent, disabled: !inList, run: indent },
     ],
     [
-      { id: "quote", title: "Quote", icon: TOOLBAR_ICONS.quote, active: toolbar.isBlockquote, run: () => editor.chain().focus().toggleBlockquote().run() },
-      { id: "code", title: "Code block", icon: TOOLBAR_ICONS.code, active: toolbar.isCodeBlock, run: () => editor.chain().focus().toggleCodeBlock().run() },
+      { id: "quote", title: "Quote", keys: "Mod-Shift-b", icon: TOOLBAR_ICONS.quote, active: toolbar.isBlockquote, run: () => editor.chain().focus().toggleBlockquote().run() },
+      { id: "code", title: "Code block", keys: "Mod-Alt-c", icon: TOOLBAR_ICONS.code, active: toolbar.isCodeBlock, run: () => editor.chain().focus().toggleCodeBlock().run() },
       { id: "table", title: "Insert table", icon: TOOLBAR_ICONS.table, run: () => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run() },
       { id: "toggle", title: "Toggle (collapsible block; wraps the selection)", icon: TOOLBAR_ICONS.toggle, when: toggleBlocksOn, active: toolbar.isToggle, run: () => {
         const sel = editor.state.selection;
@@ -1149,10 +1416,11 @@ export default function MarkdownEditor({
   // The insert cluster (image / link / line-link) is rendered explicitly rather
   // than in the data array: its handlers read a DOM ref (the file input) / the
   // clipboard, which the refs lint rule won't allow inside a mapped structure.
-  const showImage = showTb("image") && !!uploadImage;
+  const showImage = showTb("image") && !!uploadFile;
+  const showAttach = showTb("attach") && !!uploadFile;
   const showWeblink = showTb("weblink");
   const showCopyLink = showTb("link") && !!itemId;
-  const hasInsert = showImage || showWeblink || showCopyLink;
+  const hasInsert = showImage || showAttach || showWeblink || showCopyLink;
   const showColor = showTb("color");
   const showHighlight = showTb("highlight");
   const showSlide = showTb("slide");
@@ -1184,7 +1452,7 @@ export default function MarkdownEditor({
                 {/* keyed by title, not id: undo/redo deliberately share one id
                     (one settings toggle hides the pair), so ids aren't unique. */}
                 {g.map((b) => (
-                  <ToolbarButton key={b.title} icon={b.icon} label={b.label} title={b.title} active={b.active} disabled={b.disabled} onClick={b.run} />
+                  <ToolbarButton key={b.title} icon={b.icon} label={b.label} title={b.title} keys={b.keys} active={b.active} disabled={b.disabled} onClick={b.run} />
                 ))}
               </div>
             ))}
@@ -1194,6 +1462,9 @@ export default function MarkdownEditor({
                 {visibleGroups.length > 0 && sep}
                 {showImage && (
                   <ToolbarButton icon={TOOLBAR_ICONS.image} title="Insert image (or paste/drop one)" onClick={openImagePicker} />
+                )}
+                {showAttach && (
+                  <ToolbarButton icon={TOOLBAR_ICONS.attach} title="Attach a file (uploads it and links it here — or paste/drop one, or type /file)" onClick={openFilePicker} />
                 )}
                 {showWeblink && (
                   <ToolbarButton icon={TOOLBAR_ICONS.weblink} title="Insert link" active={toolbar.isLink || linkDraft !== null} onClick={openLinkEditor} />
@@ -1207,8 +1478,26 @@ export default function MarkdownEditor({
             {(showColor || showHighlight || showSlide || showComment) && (
               <div className="flex items-center gap-0.5">
                 {(visibleGroups.length > 0 || hasInsert) && sep}
-                {showColor && swatchControl("color", toolbar.textColor, setColor)}
-                {showHighlight && swatchControl("highlight", toolbar.highlight, setHighlight)}
+                {showColor && (
+                  <SwatchControl
+                    kind="color"
+                    current={toolbar.textColor}
+                    onPick={setColor}
+                    open={openSwatch === "color"}
+                    onToggle={() => setOpenSwatch(openSwatch === "color" ? null : "color")}
+                    isDesktop={isDesktop}
+                  />
+                )}
+                {showHighlight && (
+                  <SwatchControl
+                    kind="highlight"
+                    current={toolbar.highlight}
+                    onPick={setHighlight}
+                    open={openSwatch === "highlight"}
+                    onToggle={() => setOpenSwatch(openSwatch === "highlight" ? null : "highlight")}
+                    isDesktop={isDesktop}
+                  />
+                )}
                 {showSlide && (
                   <ToolbarButton
                     icon={TOOLBAR_ICONS.slide}
@@ -1262,7 +1551,10 @@ export default function MarkdownEditor({
 
   return (
     // relative: the offset parent the comment popover positions against.
-    <div ref={wrapRef} className="relative border-b border-line">
+    // The closing rule is chrome for a full-height document body; a compact body
+    // (task canvas, widget, dashboard embed) sits inline above other content, so
+    // the rule just stacks another hairline into the pane (Tyler, 2026-08-14).
+    <div ref={wrapRef} className={`relative${compact ? "" : " border-b border-line"}`}>
       {/* The formatting bar is hidden on a locked item (nothing here can act on a
           read-only document). On desktop it merges with the body's view-mode
           controls (viewControls, right-aligned) into one bar; when the collapse
@@ -1377,7 +1669,25 @@ export default function MarkdownEditor({
           e.target.value = ""; // allow re-picking the same file
           if (upload && files.length) {
             editor.chain().focus().run();
-            void insertUploadedImages(editor.view, files, upload);
+            void insertUploadedFiles(editor.view, files, upload);
+          }
+        }}
+      />
+
+      {/* Hidden any-file picker behind the toolbar's Attach button and the
+          "/file" slash command. Same upload path; non-images land as links. */}
+      <input
+        ref={anyFileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(e) => {
+          const upload = uploadRef.current;
+          const files = Array.from(e.target.files ?? []);
+          e.target.value = ""; // allow re-picking the same file
+          if (upload && files.length) {
+            editor.chain().focus().run();
+            void insertUploadedFiles(editor.view, files, upload);
           }
         }}
       />
@@ -1386,7 +1696,13 @@ export default function MarkdownEditor({
         <PromoteLinePopup
           initialTitle={promote.title}
           initialBody={promote.body}
-          onSubmit={submitPromote}
+          meetingId={promoteToMeetingId!}
+          blockRef={promote.blockId}
+          onBeforeCreate={flushBeforePromote}
+          onDone={() => {
+            setPromote(null);
+            router.refresh();
+          }}
           onCancel={() => setPromote(null)}
         />
       )}

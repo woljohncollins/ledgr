@@ -144,13 +144,28 @@ function propString(properties: unknown, key: string): string | null {
   return typeof v === "string" && v.length >= 10 ? v : null;
 }
 
+// A custom date property value is either a day scalar ("2026-09-10") or, for a
+// `withTime` field (ADR-254), a full ISO instant. Anything longer than a day
+// that parses is the instant; a bare day (or garbage) returns null so the
+// caller keeps the day-only path. Exported so the spine and the cell renderer
+// agree with placement on which values carry a clock.
+export function propInstant(v: string | null): Date | null {
+  if (!v || v.length <= 10) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
 // Resolve one DateRef on an item to an Anchor (or null when unset). tz governs
 // how a real instant is split into a local day + minutes.
 function readAnchor(item: PlaceableItem, ref: DateRef, tz: string): Anchor | null {
   if ("prop" in ref) {
     const v = propString(item.properties, ref.prop);
-    // Custom date props are ISO date scalars, day-only for v1 (ADR-timeline).
-    return v ? { ymd: v.slice(0, 10), minutes: null } : null;
+    if (!v) return null;
+    // A withTime prop stores a real instant (ADR-254): split it in the owner's
+    // zone like meetingAt. A day scalar stays an all-day anchor.
+    const inst = propInstant(v);
+    if (inst) return { ymd: ymdOf(ymdInZone(inst, tz)), minutes: minutesInZone(inst, tz) };
+    return { ymd: v.slice(0, 10), minutes: null };
   }
   const d = builtinDate(item, ref.field);
   if (!d) return null;
@@ -235,7 +250,13 @@ function writeRef(
 ): PatchParts {
   const parts = emptyParts();
   if ("prop" in ref) {
-    parts.propertyPatch[ref.prop] = anchor ? anchor.ymd : null;
+    // Value-driven (ADR-254): an anchor with minutes writes an instant, one
+    // without writes the day. The view's zoom decides which the drag produced.
+    parts.propertyPatch[ref.prop] = !anchor
+      ? null
+      : anchor.minutes != null
+        ? zonedInstant(ymdToRec(anchor.ymd), anchor.minutes, tz).toISOString()
+        : anchor.ymd;
     return parts;
   }
   const f = ref.field;

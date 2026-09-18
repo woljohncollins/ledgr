@@ -17,10 +17,18 @@ export default function TaskCheckCircle({
   itemId,
   done: initialDone,
   priority = null,
+  onOptimisticChange,
 }: {
   itemId: string;
   done: boolean;
   priority?: number | null;
+  // Mirrors this circle's optimistic state to the row around it, so the ROW can
+  // look done at the same instant the circle does (Tyler's "slight pause",
+  // 2026-08-12). Without it the circle filled immediately but the title's
+  // strikethrough waited on the server refetch — the completion looked half-
+  // applied for ~500ms+. Fires on click and again if the request fails and the
+  // circle reverts, so the row never disagrees with the control.
+  onOptimisticChange?: (done: boolean) => void;
 }) {
   const refresh = useListRefresh();
   const [done, setDone] = useState(initialDone);
@@ -33,6 +41,7 @@ export default function TaskCheckCircle({
   async function toggle() {
     const next = !done;
     setDone(next);
+    onOptimisticChange?.(next);
     beginSave();
     try {
       const res = await fetch(`/api/items/${itemId}/complete`, { method: "POST" });
@@ -41,6 +50,7 @@ export default function TaskCheckCircle({
       refresh();
     } catch {
       setDone(!next);
+      onOptimisticChange?.(!next);
       endSave(false);
     }
   }

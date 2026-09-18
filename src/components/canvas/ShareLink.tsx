@@ -4,7 +4,19 @@
 // server; the public render takes no session.
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { isTheme, THEME_LABELS, THEMES, type Theme } from "@/lib/settings";
+
+// The owner's current app theme, read off <html> (layout.tsx sets data-theme
+// there; unset means dark). Zero plumbing, and it is by definition
+// what the owner is looking at right now.
+function currentTheme(): Theme {
+  const t = document.documentElement.dataset.theme;
+  return isTheme(t) ? t : "dark";
+}
+// useSyncExternalStore is the hydration-safe way to read a browser-only value:
+// the server snapshot ("dark") renders first, the real class after hydration.
+const noSubscribe = () => () => {};
 
 type TokenRow = { token: string; revokedAt: string | null; createdAt: string };
 
@@ -29,6 +41,11 @@ export default function ShareLink({
   // Bakes into the next link: off → the shared/PDF render drops @-mention icons
   // for a cleaner document. The choice rides the token, so the recipient sees it.
   const [showIcons, setShowIcons] = useState(true);
+  // The look the shared page opens in. Defaults to the owner's own theme; the
+  // recipient can still switch from the page's Appearance control.
+  const appTheme = useSyncExternalStore(noSubscribe, currentTheme, () => "dark" as Theme);
+  const [themePick, setTheme] = useState<Theme | null>(null);
+  const theme = themePick ?? appTheme;
 
   useEffect(() => {
     let cancelled = false;
@@ -51,7 +68,7 @@ export default function ShareLink({
       const res = await fetch(`/api/items/${itemId}/share`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ showIcons }),
+        body: JSON.stringify({ showIcons, theme }),
       });
       if (!res.ok) throw new Error(`failed (${res.status})`);
       const { token } = (await res.json()) as { token: string };
@@ -105,6 +122,20 @@ export default function ShareLink({
           />
           Show item icons
         </label>
+        <label className="flex items-center gap-1.5 text-xs text-neutral-400">
+          Opens in
+          <select
+            value={theme}
+            onChange={(e) => setTheme(e.target.value as Theme)}
+            className="rounded border border-line bg-surface-1 px-1 py-0.5 text-xs text-ink"
+          >
+            {THEMES.map((t) => (
+              <option key={t} value={t}>
+                {THEME_LABELS[t]}
+              </option>
+            ))}
+          </select>
+        </label>
         {error && <span className="text-xs text-red-400">{error}</span>}
       </div>
       {active.length > 0 && (
@@ -125,6 +156,16 @@ export default function ShareLink({
               >
                 {copied === t.token ? "copied ✓" : "copy"}
               </button>
+              {/* An explicit "view" beside copy/revoke (Tyler, 2026-08-29) — the
+                  truncated URL is also a link, but it doesn't read as one. */}
+              <a
+                href={`/share/${t.token}`}
+                target="_blank"
+                rel="noreferrer"
+                className="shrink-0 text-neutral-500 hover:text-neutral-300"
+              >
+                view
+              </a>
               <button
                 onClick={() => void revoke(t.token)}
                 className="shrink-0 text-neutral-600 hover:text-[var(--accent)]"

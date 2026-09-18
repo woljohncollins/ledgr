@@ -10,7 +10,8 @@
 // from @-mentions on every save (src/lib/mentions.ts), so the write path
 // refuses to create or delete them — a manually deleted mention edge would
 // silently resurrect on the next body save.
-import { and, desc, eq, inArray, ne, isNull, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, ne, isNull, or, sql, type SQL } from "drizzle-orm";
+import { unionAll } from "drizzle-orm/pg-core";
 import { getDb } from "@/db";
 import { items, relations } from "@/db/schema";
 import { ItemError, listColumns } from "@/lib/items";
@@ -32,25 +33,46 @@ export type RelatedItem = Awaited<
   : never;
 
 // Exposed as a query builder (items.ts pattern) so verification can assert
-// the generated SQL carries owner_id and selects no body. The separate
-// relations source/target indexes make the OR join two bitmap index scans
-// (schema.md index plan).
+// the generated SQL carries owner_id and selects no body.
+//
+// Shape matters here: this reads the edges FIRST (two index probes, one per
+// direction, UNION ALL) and joins items onto that small set — O(edges of this
+// item). The previous OR-join (`(source=X and i.id=target) or (target=X and
+// i.id=source)`) gave the planner no index path from either side, so it
+// scanned and sorted ALL the owner's items and probed relations per row:
+// measured at 26,653 buffers / 127ms on the prod spoke for ONE item page
+// open, vs 3,241 / 23ms for this form (perf-audit.mts reproduces it).
 export function relatedItemsQuery(ownerId: string, itemId: string) {
-  return getDb()
+  const db = getDb();
+  const edges = unionAll(
+    db
+      .select({
+        otherId: relations.targetId,
+        role: relations.role,
+        matchState: relations.matchState,
+        home: relations.home,
+      })
+      .from(relations)
+      .where(eq(relations.sourceId, itemId)),
+    db
+      .select({
+        otherId: relations.sourceId,
+        role: relations.role,
+        matchState: relations.matchState,
+        home: relations.home,
+      })
+      .from(relations)
+      .where(eq(relations.targetId, itemId))
+  ).as("edges");
+  return db
     .select({
       ...listColumns,
-      role: relations.role,
-      matchState: relations.matchState,
-      home: relations.home,
+      role: edges.role,
+      matchState: edges.matchState,
+      home: edges.home,
     })
-    .from(relations)
-    .innerJoin(
-      items,
-      or(
-        and(eq(relations.sourceId, itemId), eq(items.id, relations.targetId)),
-        and(eq(relations.targetId, itemId), eq(items.id, relations.sourceId))
-      )
-    )
+    .from(edges)
+    .innerJoin(items, eq(items.id, edges.otherId))
     .where(
       and(
         eq(items.ownerId, ownerId),
@@ -191,6 +213,53 @@ export async function outgoingRelationsByRole(
   return out;
 }
 
+// The list-surface counterpart of outgoingRelationsByRole: the same edges for
+// MANY source items in ONE query, bucketed by source id (Tyler, 2026-08-12 —
+// tag chips on task rows, and grouping a list by tag). Doing this per row would
+// be an N+1 against a list that already loads in one query, which the perf rules
+// rule out; a list of 200 tasks costs one extra round trip here.
+//
+// Same shape and same guarantees as the single-item version — body-free,
+// owner-scoped on the targets, live non-template items only — so a caller can
+// swap between them. A source id with no edges is present with an empty array,
+// so callers never have to distinguish "no tags" from "not fetched".
+export async function outgoingRelationsBySource(
+  ownerId: string,
+  itemIds: string[],
+  role: string
+): Promise<Map<string, { id: string; title: string; type: string }[]>> {
+  const out = new Map<string, { id: string; title: string; type: string }[]>();
+  for (const id of itemIds) out.set(id, []);
+  if (itemIds.length === 0) return out;
+  const rows = await getDb()
+    .select({
+      sourceId: relations.sourceId,
+      id: items.id,
+      title: items.title,
+      type: items.type,
+    })
+    .from(relations)
+    .innerJoin(items, eq(items.id, relations.targetId))
+    .where(
+      and(
+        inArray(relations.sourceId, itemIds),
+        eq(relations.role, role),
+        eq(items.ownerId, ownerId),
+        isNull(items.deletedAt),
+        eq(items.isTemplate, false)
+      )
+    )
+    // Alphabetical, not by updatedAt: a row's chips and a list's tag groups are
+    // read as a set, and a set that reorders itself when an unrelated tag is
+    // renamed looks like a bug. The single-item version sorts by recency because
+    // an editable field's newest link belongs on top; a read-only chip doesn't.
+    .orderBy(asc(items.title));
+  for (const row of rows) {
+    out.get(row.sourceId)?.push({ id: row.id, title: row.title, type: row.type });
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Write path (slice 15). Every entry point validates both ids against the
 // owner before touching relations, because relations rows carry no owner_id
@@ -284,6 +353,33 @@ async function clearHomeEdges(childId: string) {
     .update(relations)
     .set({ home: false })
     .where(and(eq(relations.sourceId, childId), eq(relations.home, true)));
+}
+
+// The records this item is FILED UNDER: a home edge, or a `project`/`contains`
+// role, regardless of the home flag. The same predicate the completion sweep
+// and the record cards' contained/visitor split use.
+//
+// It exists because setHome DEMOTES a previous home edge (home=false) instead
+// of deleting it, and the typed collection cards are home-agnostic — so
+// re-filing a task under a second project left it rendered on BOTH projects'
+// Tasks cards, with the old one no longer marked as its home. Callers that
+// promise "this lives in exactly one record" have to clear the old edge
+// themselves; this tells them what to clear.
+export async function filedUnderRecords(
+  ownerId: string,
+  itemId: string
+): Promise<string[]> {
+  await assertOwned(ownerId, itemId);
+  const rows = await getDb()
+    .select({ targetId: relations.targetId })
+    .from(relations)
+    .where(
+      and(
+        eq(relations.sourceId, itemId),
+        or(eq(relations.home, true), inArray(relations.role, ["project", "contains"]))
+      )
+    );
+  return Array.from(new Set(rows.map((r) => r.targetId)));
 }
 
 // Containment (ADR-111): make `childId` live in `parentId` as its PRIMARY

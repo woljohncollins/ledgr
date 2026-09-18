@@ -12,7 +12,6 @@ import TaskTitle from "@/components/canvas/TaskTitle";
 import RelationProperties from "@/components/relations/RelationProperties";
 import PeopleRow from "@/components/relations/PeopleRow";
 import CustomProperties from "@/components/build/CustomProperties";
-import CanvasSection from "@/components/canvas/CanvasSection";
 import CanvasTwoPane from "@/components/canvas/CanvasTwoPane";
 import SchedulePopover from "@/components/canvas/rail/SchedulePopover";
 import DueRow from "@/components/canvas/rail/DueRow";
@@ -21,7 +20,10 @@ import StatusRow from "@/components/canvas/rail/StatusRow";
 import { RAIL_ROW, RAIL_STATIC } from "@/components/canvas/rail/styles";
 import FocusStar from "@/components/today/FocusStar";
 import RelatedPanel from "@/components/relations/RelatedPanel";
-import ItemUtilitiesFooter from "@/components/canvas/ItemUtilitiesFooter";
+import LinkedRow from "@/components/canvas/rail/LinkedRow";
+import HistoryPanel from "@/components/canvas/HistoryPanel";
+import ItemFilesSection from "@/components/attachments/ItemFilesSection";
+import { listItemFilesWithRefs } from "@/lib/attachments";
 import { getType } from "@/lib/types";
 import { getItem } from "@/lib/items";
 import { resolveStatusSchema } from "@/lib/status";
@@ -29,6 +31,7 @@ import { parseRecurrence } from "@/lib/recurrence";
 import { appTodayYmd } from "@/lib/recurrence-service";
 import { parseScheduledTime } from "@/lib/scheduled-time";
 import { isFocusedOn } from "@/lib/focus";
+import { isDuePinned } from "@/lib/date-anchor";
 import { bodyMarkdown } from "@/lib/body";
 import type { CanvasProps } from "@/lib/modules";
 
@@ -63,14 +66,24 @@ export default async function TaskCanvas(canvasProps: CanvasProps) {
 
   const relationFields = propertySchema.filter((p) => p.kind === "relation");
   const scalarFields = propertySchema.filter((p) => p.kind !== "relation");
+  // Project leads the rail (the Todoist order, Tyler 2026-08-18): the field that
+  // says where the task LIVES reads before the ones that say when.
+  const projectFields = relationFields.filter(
+    (p) => p.key === "project" || p.targetType === "project"
+  );
+  const otherRelationFields = relationFields.filter((p) => !projectFields.includes(p));
 
   // Parent breadcrumb (a subtask points up to its parent task).
   const parent = item.parentId ? await getItem(ownerId, item.parentId).catch(() => null) : null;
+  const itemFiles = await listItemFilesWithRefs(ownerId, item.id).catch(() => []);
   const parentLink =
     parent && !parent.deletedAt ? { href: `/items/${parent.id}`, title: parent.title || "Untitled" } : null;
 
   return (
-    <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:px-8 md:px-10">
+    // No right padding at the split width (Tyler, 2026-08-18): the rail panel
+    // runs to the container's right edge (the scrollbar in the modal). Stacked
+    // mobile keeps px-4 on both sides.
+    <div className="mx-auto w-full max-w-5xl px-4 py-6 sm:pl-8 sm:pr-0 md:pl-10">
       {parentLink && (
         <Link
           href={parentLink.href}
@@ -87,7 +100,12 @@ export default async function TaskCanvas(canvasProps: CanvasProps) {
       <CanvasTwoPane
         storageKey="task"
         resizable={false}
-        defaultWidth={340}
+        // The tinted, visually separate properties panel (Tyler, 2026-08-18 —
+        // "a completely separate column that stands out"). 248 wide: the rows
+        // stack label-over-value, so narrower still reads, and the main pane
+        // keeps the width.
+        railPanel
+        defaultWidth={248}
         main={
           <div className="min-w-0">
             <TaskTitle
@@ -105,15 +123,37 @@ export default async function TaskCanvas(canvasProps: CanvasProps) {
               />
             </div>
             <div className="mt-4">
-              <Subtasks ownerId={ownerId} itemId={item.id} parentScheduled={item.scheduledDate ?? null} />
+              <Subtasks
+                ownerId={ownerId}
+                itemId={item.id}
+                parentScheduled={item.scheduledDate ?? null}
+                bare
+              />
             </div>
+            {/* Linked here sits INSIDE the main pane (ADR-253) so it lines up with
+                the title and body above it. It used to render below the two-pane
+                split, where its own `max-w-3xl mx-auto` re-centered it against the
+                full width — rail included — leaving it visibly shoved right and
+                not even aligned with the footer beneath it. `bare` drops that
+                inner column; the add affordance lives in the rail's Linked row. */}
+            <div className="mt-6">
+              <RelatedPanel
+                ownerId={ownerId}
+                itemId={item.id}
+                claimPersons
+                addBar={false}
+                bare
+              />
+            </div>
+
           </div>
         }
         rail={
-          // The task's details as a clean divided list of rows. The heavy editors
-          // (date · time · repeat · reminder) collapse behind the single Schedule
-          // row's popover (ADR-108); everything stays one tap away but out of
-          // sight until needed.
+          // The task's details as a clean divided list of rows, in the owner's
+          // order (Tyler, 2026-09-11): the two DATES lead, then how urgent, then
+          // how it's labelled and who's involved, then where it lives and what
+          // it's connected to. The heavy editors (time · repeat · reminder) stay
+          // collapsed behind the Schedule row's popover (ADR-108).
           <div className="flex flex-col">
           {/* Status: the completion circle now lives next to the title in
               checkbox mode (TaskTitle), so the rail only carries a status row
@@ -124,8 +164,7 @@ export default async function TaskCanvas(canvasProps: CanvasProps) {
             </div>
           )}
 
-          {/* Schedule: scheduled date + time-of-day + repeat + reminder, tucked
-              into one popover. */}
+          {/* Schedule: the planned date, plus time / repeat / reminder inside. */}
           <div className={RAIL_ROW}>
             <SchedulePopover
               itemId={item.id}
@@ -138,26 +177,83 @@ export default async function TaskCanvas(canvasProps: CanvasProps) {
               done={statusDone}
             />
           </div>
+
+          {/* Due: its own row directly under Schedule, so the pair reads together
+              (Tyler, 2026-09-11). ADR-253 had folded it into the popover above,
+              which fixed "two dates for everything" by making the second date
+              invisible — with no deadline set there was no affordance at all.
+              The anchoring behavior is unchanged; only its home moved back. */}
           <div className={RAIL_ROW}>
-            <DueRow itemId={item.id} initial={item.dueDate?.toISOString() ?? null} today={today} done={statusDone} />
+            <DueRow
+              itemId={item.id}
+              scheduled={item.scheduledDate?.toISOString() ?? null}
+              due={item.dueDate?.toISOString() ?? null}
+              today={today}
+              pinned={isDuePinned(props)}
+              done={statusDone}
+            />
           </div>
+
           <div className={RAIL_ROW}>
             <PriorityRow itemId={item.id} initial={item.urgency} />
           </div>
 
-          {/* Properties: scalar + relation fields under one header (the canvas
-              redesign), bare so the compact rail stays a divided list, not a card
-              (Brandon, 2026-06-27). Relations are marked with a link glyph.
-              People is a bespoke row, not a typed field (ADR-175): it shows every
-              confirmed person edge whoever wrote it, so it always renders. */}
+          {/* The remaining fields as self-labelled Todoist-style sections — no
+              "Properties" group header (Tyler, 2026-08-18): each field names
+              itself, so the umbrella heading only added a level. Tags/relations
+              and People get the label-line-with-"+" shape (rail mode); scalar
+              custom fields keep their stacked rows. People is a bespoke row, not
+              a typed field (ADR-175): it shows every confirmed person edge
+              whoever wrote it, so it always renders. */}
+          {otherRelationFields.length > 0 && (
+            <div className={`${RAIL_ROW} ${RAIL_STATIC}`}>
+              <RelationProperties ownerId={ownerId} itemId={item.id} typeKey="task" props={otherRelationFields} rail />
+            </div>
+          )}
           <div className={`${RAIL_ROW} ${RAIL_STATIC}`}>
-            <CanvasSection bare icon="properties" title="Properties">
-              <div className="flex flex-col gap-2">
-                <CustomProperties itemId={item.id} typeKey="task" schema={scalarFields} initial={props} hideHeading bare />
-                <RelationProperties ownerId={ownerId} itemId={item.id} typeKey="task" props={relationFields} hideHeading bare />
-                <PeopleRow ownerId={ownerId} itemId={item.id} />
-              </div>
-            </CanvasSection>
+            <PeopleRow ownerId={ownerId} itemId={item.id} rail />
+          </div>
+
+          {/* Project: where the task lives. It led the rail under the Todoist
+              order (2026-08-18); Tyler moved it below the dates and people
+              (2026-09-11), so what you set most often reads first. */}
+          {projectFields.length > 0 && (
+            <div className={`${RAIL_ROW} ${RAIL_STATIC}`}>
+              <RelationProperties ownerId={ownerId} itemId={item.id} typeKey="task" props={projectFields} rail />
+            </div>
+          )}
+
+          {/* Files, directly above Linked (Tyler, 2026-09-11). Everything about
+              the task lives in the rail; the body pane is the work. Rendered
+              unconditionally but SELF-HIDING: the component returns null with
+              zero files and stays mounted listening for upload events, so the
+              section appears the moment the first file lands without a reload.
+              Gating it on a server-side count here would cost exactly that. */}
+          <div className={`${RAIL_ROW} ${RAIL_STATIC}`}>
+            <ItemFilesSection itemId={item.id} initial={itemFiles} column={false} />
+          </div>
+
+          {/* Linked: the connected web, as a label + count + "+" beside its
+              relation siblings above. The panel in the main pane lists the
+              items; this row is where you ADD one. */}
+          <div className={`${RAIL_ROW} ${RAIL_STATIC}`}>
+            <LinkedRow ownerId={ownerId} itemId={item.id} />
+          </div>
+
+          {scalarFields.length > 0 && (
+            <div className={`${RAIL_ROW} ${RAIL_STATIC}`}>
+              <CustomProperties itemId={item.id} typeKey="task" schema={scalarFields} initial={props} hideHeading bare />
+            </div>
+          )}
+
+          {/* Version History, in the rail directly under Linked (Tyler,
+              2026-09-11). It's a disclosure like Linked is, and both are "what
+              else is attached to this task" rather than part of the work, so
+              they belong together in the details column rather than trailing
+              the body. Files stay in the main pane — a file list needs the
+              width, and it only renders when there ARE files. */}
+          <div className={`${RAIL_ROW} ${RAIL_STATIC}`}>
+            <HistoryPanel itemId={item.id} currentText={bodyMarkdown(item.body)} bare />
           </div>
 
           {/* Focus today: a one-tap star, kept in plain sight (not behind a
@@ -172,10 +268,6 @@ export default async function TaskCanvas(canvasProps: CanvasProps) {
         }
       />
 
-      {/* The rail's People row owns confirmed persons (ADR-175), so the panel
-          doesn't repeat them. */}
-      <RelatedPanel ownerId={ownerId} itemId={item.id} claimPersons />
-      <ItemUtilitiesFooter itemId={item.id} currentText={bodyMarkdown(item.body)} />
     </div>
   );
 }

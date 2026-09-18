@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { mentionGlyphSvg } from "@/lib/mention-glyph";
 import { loadTypeMetaMap, type TypeMeta } from "@/components/search/type-token";
+import { createRowText, type CreateTarget } from "@/lib/mention-create";
 import type { MentionHit } from "./useMentionTypeahead";
 
 export type LinkedItem = { id: string; title: string; type: string | null };
@@ -35,13 +36,14 @@ export function useTypeGlyphs() {
 }
 
 // The anchored results popup. `selected` runs 0..hits.length-1 across the hits,
-// with hits.length being the create-on-miss row when `showCreate` is true. Rows
-// use mousedown (not click) so the parent field never blurs out from under the
-// pointer before the pick registers.
+// then across `createTargets` (so hits.length is the FIRST create row, not the
+// only one — the create-on-miss picker offers one row per type it could be, see
+// lib/mention-create.ts). Rows use mousedown (not click) so the parent field
+// never blurs out from under the pointer before the pick registers.
 export function MentionPopup({
   hits,
   selected,
-  showCreate,
+  createTargets,
   creating,
   query,
   typeFilter,
@@ -53,18 +55,23 @@ export function MentionPopup({
 }: {
   hits: MentionHit[];
   selected: number;
-  showCreate: boolean;
+  // The create rows to offer, in order; empty means create-on-miss is off (an
+  // exact title match, or an empty query).
+  createTargets: CreateTarget[];
   creating: boolean;
   query: string;
   typeFilter: TypeMeta | null;
   onHover: (i: number) => void;
   onPick: (hit: MentionHit) => void;
-  onCreate: () => void;
+  onCreate: (target: CreateTarget) => void;
   glyph: (type: string | null) => string;
   typeLabel: (type: string | null) => string | null;
 }) {
   return (
-    <ul className="absolute left-0 top-full z-20 mt-1 w-72 max-w-[90vw] overflow-hidden rounded-lg border border-neutral-700 bg-neutral-900 py-1 shadow-xl shadow-black/50">
+    // z-[60] is the floating-panel tier (globals.css layer scale). It was z-20,
+    // which lost to page chrome at 40 and to menus at 50 — a typeahead the user is
+    // actively typing into must win over anything it can overlap.
+    <ul className="absolute left-0 top-full z-[60] mt-1 w-72 max-w-[90vw] overflow-hidden rounded-lg border border-neutral-700 bg-neutral-900 py-1 shadow-xl shadow-black/50">
       {typeFilter && (
         <li className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-neutral-400">
           <span aria-hidden dangerouslySetInnerHTML={{ __html: glyph(typeFilter.key) }} />
@@ -89,20 +96,29 @@ export function MentionPopup({
           </button>
         </li>
       ))}
-      {showCreate && (
-        <li>
+      {/* Create-on-miss. One row per type the name could become, each labelled
+          with that type on the right edge exactly like a hit row — so the block
+          reads as one question ("create this as what?") with N answers, and the
+          answer is never hidden behind the word "Create". A scoped query
+          ("@/person Jane") yields a single row, i.e. the old behavior. */}
+      {createTargets.map((target, i) => (
+        <li key={target.key}>
           <button
             type="button"
-            onMouseDown={(e) => { e.preventDefault(); onCreate(); }}
-            onMouseEnter={() => onHover(hits.length)}
+            onMouseDown={(e) => { e.preventDefault(); onCreate(target); }}
+            onMouseEnter={() => onHover(hits.length + i)}
             className={`flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-sm ${
-              selected === hits.length ? "bg-neutral-800 text-neutral-100" : "text-[var(--accent)]"
+              selected === hits.length + i
+                ? "bg-neutral-800 text-neutral-100"
+                : "text-[var(--accent)]"
             }`}
           >
-            {creating ? `Creating “${query}”…` : `Create ${typeFilter?.label ?? ""} “${query}”`.replace(/\s+/g, " ")}
+            <span className="shrink-0 opacity-70" aria-hidden dangerouslySetInnerHTML={{ __html: glyph(target.key) }} />
+            <span className="min-w-0 flex-1 truncate">{createRowText(query, creating)}</span>
+            <span className="shrink-0 text-xs text-neutral-500">{target.label}</span>
           </button>
         </li>
-      )}
+      ))}
     </ul>
   );
 }

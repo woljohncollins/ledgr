@@ -21,8 +21,13 @@ import {
   type ReactNode,
 } from "react";
 import { createPortal } from "react-dom";
+import { announceFloatingOpen, onOtherFloatingOpen } from "@/lib/floating";
 
 type Coords = { left: number; top?: number; bottom?: number; maxHeight: number };
+
+// Module-scope counter for per-instance floating ids (see floating.ts). Only ever
+// compared for inequality, so the value itself is meaningless.
+let nextPopoverId = 0;
 
 // The placement half of the above, on its own so any anchored floating panel can
 // reuse it (the relation typeahead's listbox, which clipped against the rail's
@@ -108,6 +113,19 @@ export default function Popover({
     align
   );
   const panelRef = useRef<HTMLDivElement>(null);
+  // A stable per-instance id, so this popover ignores its own announcement.
+  // useState's lazy initializer, not a ref: this is a render-time value, and
+  // reading `ref.current` during render is (rightly) a lint error.
+  const [floatingId] = useState(() => `popover-${nextPopoverId++}`);
+
+  // One open floating panel at a time (src/lib/floating.ts): announce on open,
+  // close when something else opens. The outside-click handler below covers
+  // pointer dismissal; this covers panels that open from a keystroke instead.
+  useEffect(() => {
+    if (!open) return;
+    announceFloatingOpen(floatingId);
+    return onOtherFloatingOpen(floatingId, () => setOpen(false));
+  }, [open, floatingId]);
 
   useEffect(() => {
     if (!open) return;

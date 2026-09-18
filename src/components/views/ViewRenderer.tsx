@@ -7,20 +7,29 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import BoardDnd, { type BoardCard } from "@/components/views/BoardDnd";
+import ProjectCardGrid, { ProjectCardBody, projectCardFrameClass } from "@/components/projects/ProjectCardGrid";
+import type { ViewProjectCards } from "@/lib/project-cards";
 import PlannerCalendar from "@/components/planner/PlannerCalendar";
+import TimelineSpine from "@/components/timeline/TimelineSpine";
 import RowMenu from "@/components/lists/RowMenu";
 import SwipeRow from "@/components/lists/SwipeRow";
 import SelectCheckbox from "@/components/selection/SelectCheckbox";
 import { SelectBodyCell, SelectHeaderCell } from "@/components/selection/SelectTableCell";
 import SubtaskCheckbox from "@/components/subtasks/SubtaskCheckbox";
 import SubtaskExpandableRow from "@/components/subtasks/SubtaskExpandableRow";
+import { contactLink } from "@/lib/contact-links";
+import { imageUrl } from "@/lib/person-image";
+import { propInstant } from "@/lib/placement";
 import type { Progress } from "@/lib/subtasks";
 import { DEFAULT_TIMEZONE } from "@/lib/today";
-import { groupValueFor, orderedGroups } from "@/lib/view-grouping";
+import { groupValuesFor, orderedGroups, type GroupEdges } from "@/lib/view-grouping";
+import BoardColumn from "@/components/views/BoardColumn";
+import { DEFAULT_GRAIN, type Grain } from "@/lib/timeline-grain";
+import type { TimelineEntry, TimelineUndated } from "@/lib/timeline-entry";
 import { DISPLAY_DEFAULTS } from "@/lib/views";
 import type { ColumnField, ViewColumn, ViewDefinition } from "@/lib/views";
 import type { OverlayEvent } from "@/lib/calendar/overlay";
-import type { StatusDef } from "@/lib/status";
+import { isTerminalCategory, type StatusDef } from "@/lib/status";
 
 // Structural shape of a listColumns row, narrowed to what the layouts use.
 // properties rides along so a board can group by a custom select field (the
@@ -68,7 +77,7 @@ const utcKey = new Intl.DateTimeFormat("en-CA", { timeZone: "UTC" });
 // during render.
 const tzFmtCache = new Map<
   string,
-  { day: Intl.DateTimeFormat; dayLong: Intl.DateTimeFormat; key: Intl.DateTimeFormat }
+  { day: Intl.DateTimeFormat; dayLong: Intl.DateTimeFormat; key: Intl.DateTimeFormat; dayTime: Intl.DateTimeFormat }
 >();
 function tzFmts(tz: string) {
   let f = tzFmtCache.get(tz);
@@ -82,6 +91,13 @@ function tzFmts(tz: string) {
         timeZone: tz,
       }),
       key: new Intl.DateTimeFormat("en-CA", { timeZone: tz }),
+      dayTime: new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZone: tz,
+      }),
     };
     tzFmtCache.set(tz, f);
   }
@@ -187,11 +203,52 @@ function columnLabel(col: ViewColumn, labels: Record<string, string>): string {
     : FIELD_COLUMN_LABELS[col.key];
 }
 
-function formatPropValue(v: unknown): string {
+function formatPropValue(v: unknown, tz?: string): string {
   if (v == null) return "";
   if (Array.isArray(v)) return v.map((x) => String(x)).join(", ");
   if (typeof v === "boolean") return v ? "Yes" : "No";
+  // A timed date property (ADR-254) reads as a local day + clock, not raw ISO.
+  if (typeof v === "string" && tz) {
+    const inst = propInstant(v);
+    if (inst) return tzFmts(tz).dayTime.format(inst);
+  }
   return String(v);
+}
+
+// A table cell's contents: the column's text, wrapped in a tel:/mailto: link
+// when the column is a `phone`/`email` property (ADR-192), so a directory-style
+// list is dialable without opening each record. Table layout ONLY, deliberately:
+// the compact row layout wraps the whole row in a Link to the item, and nesting
+// an anchor inside an anchor is invalid HTML that would also steal the row tap.
+// `stopPropagation` keeps a tap on the link from bubbling into any row handler.
+function columnCell(
+  item: ViewItem,
+  col: ViewColumn,
+  tz: string,
+  propertyKinds: Record<string, string>
+) {
+  const text = columnText(item, col, tz);
+  if (!text || col.source !== "property") return text;
+  const kind = propertyKinds[col.key];
+  if (kind === "image") {
+    const src = imageUrl(text);
+    if (!src) return text;
+    // eslint-disable-next-line @next/next/no-img-element
+    return <img src={src} alt="" className="h-6 w-6 rounded object-cover" />;
+  }
+  if (kind !== "phone" && kind !== "email") return text;
+  const link = contactLink(kind, col.key, text);
+  if (!link) return text;
+  return (
+    <a
+      href={link.href}
+      title={link.title}
+      onClick={(e) => e.stopPropagation()}
+      className="hover:text-neutral-100 hover:underline"
+    >
+      {text}
+    </a>
+  );
 }
 
 // The display text for a column on a row. Dates format in the same calendars
@@ -202,7 +259,7 @@ function columnText(item: ViewItem, col: ViewColumn, tz: string): string {
       item.properties && typeof item.properties === "object"
         ? (item.properties as Record<string, unknown>)
         : null;
-    return formatPropValue(props?.[col.key]);
+    return formatPropValue(props?.[col.key], tz);
   }
   switch (col.key) {
     case "type":
@@ -409,12 +466,14 @@ function TableLayout({
   items,
   view,
   propertyLabels,
+  propertyKinds,
   selectable,
   tz,
 }: {
   items: ViewItem[];
   view: ViewDefinition;
   propertyLabels: Record<string, string>;
+  propertyKinds: Record<string, string>;
   selectable?: boolean;
   tz: string;
 }) {
@@ -478,13 +537,26 @@ function TableLayout({
                   key={`${col.source}:${col.key}`}
                   className="py-1.5 pr-3 text-neutral-400"
                 >
-                  {columnText(item, col, tz)}
+                  {columnCell(item, col, tz, propertyKinds)}
                 </td>
               ))}
             </tr>
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+// A board card carrying the rich project-card body (2026-08-17): the same
+// element set as the grid, in the board column's compact width. Shared by the
+// read-only server board and (as a prebuilt node) the draggable client board.
+function boardProjectCard(item: ViewItem, projectCards: ViewProjectCards): ReactNode | null {
+  const card = projectCards.byId[item.id];
+  if (!card) return null;
+  return (
+    <div className={`relative rounded border p-2.5 ${projectCardFrameClass(card.favorited)}`}>
+      <ProjectCardBody card={card} config={projectCards.config} compact />
     </div>
   );
 }
@@ -496,6 +568,8 @@ function BoardLayout({
   draggable,
   statuses,
   tz,
+  groupEdges,
+  projectCards,
 }: {
   items: ViewItem[];
   view: ViewDefinition;
@@ -503,6 +577,14 @@ function BoardLayout({
   draggable?: boolean;
   statuses?: StatusDef[];
   tz: string;
+  // Edges for a relation grouping (group by Tags), batch-fetched by the page and
+  // keyed by source item id. Undefined for every other grouping, which reads its
+  // values straight off the row.
+  groupEdges?: GroupEdges;
+  // Rich project-card data + element config (2026-08-17), resolved by the page
+  // for a project-scoped board. Undefined everywhere else → the classic
+  // title+date card.
+  projectCards?: ViewProjectCards;
 }) {
   const now = new Date();
   // A status board colors its column headers with the status colors (S2).
@@ -524,64 +606,197 @@ function BoardLayout({
       properties: i.properties,
       dateLabel: rowDate(i, view.dateProperty, tz),
     }));
-    return <BoardDnd cards={cards} grouping={view.grouping} groupOrder={groupOrder} statuses={statuses} />;
+    // Rich project cards are prebuilt server nodes keyed by id — the client
+    // board renders them verbatim inside its draggable <li>s.
+    let cardBodies: Record<string, ReactNode> | undefined;
+    if (projectCards) {
+      cardBodies = {};
+      for (const i of items) {
+        const body = boardProjectCard(i, projectCards);
+        if (body) cardBodies[i.id] = body;
+      }
+    }
+    return (
+      <BoardDnd
+        cards={cards}
+        grouping={view.grouping}
+        boardKey={view.id}
+        groupOrder={groupOrder}
+        statuses={statuses}
+        cardBodies={cardBodies}
+      />
+    );
   }
-  const present = new Set(items.map((i) => groupValueFor(i, view.grouping, now)));
+  // flatMap, not map: a multi-valued grouping (Tags, multi_select) puts a row in
+  // EVERY one of its values, so the set of present columns is the union of all of
+  // them. Column totals therefore sum to more than the row count — by design, a
+  // task tagged Work and Urgent really is in both.
+  const present = new Set(
+    items.flatMap((i) => groupValuesFor(i, view.grouping, now, groupEdges))
+  );
   const columns = orderedGroups(view.grouping, present, groupOrder);
   return (
-    <div className="mt-4 flex gap-3 overflow-x-auto pb-2">
+    // Snap-scroll on a phone (one column per swipe), free scrolling on desktop.
+    // No drag on this read-only path, so unlike BoardDnd it can snap always.
+    <div className="mt-4 flex snap-x snap-mandatory gap-3 overflow-x-auto pb-2 sm:snap-none">
       {columns.map((col) => {
-        const colItems = items.filter(
-          (i) => groupValueFor(i, view.grouping, now) === col
+        const colItems = items.filter((i) =>
+          groupValuesFor(i, view.grouping, now, groupEdges).includes(col)
         );
+        const sdef = statusBoard ? statuses?.find((s) => s.key === col) : undefined;
         return (
-          <div
+          <BoardColumn
             key={col}
-            className="flex w-60 shrink-0 flex-col rounded-lg border border-neutral-800 bg-neutral-900/40"
+            col={col}
+            boardKey={view.id}
+            label={sdef?.label ?? col}
+            color={sdef?.color}
+            count={colItems.length}
+            defaultCollapsed={sdef ? isTerminalCategory(sdef.category) : false}
           >
-            <div className="flex items-center justify-between border-b border-neutral-800 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
-              {(() => {
-                const sdef = statusBoard ? statuses?.find((s) => s.key === col) : undefined;
-                return (
-                  <span className="flex items-center gap-1.5 truncate">
-                    {sdef?.color && (
-                      <span
-                        aria-hidden
-                        className="inline-block h-2 w-2 shrink-0 rounded-full"
-                        style={{ backgroundColor: sdef.color }}
-                      />
-                    )}
-                    {sdef?.label ?? col}
-                  </span>
-                );
-              })()}
-              <span className="text-neutral-600">{colItems.length}</span>
-            </div>
             <ul className="flex flex-col gap-1.5 p-2">
-              {colItems.map((item) => (
-                <li key={item.id}>
-                  <Link
-                    href={`/items/${item.id}`}
-                    className={`block rounded border border-neutral-800 bg-neutral-900 px-2.5 py-1.5 text-sm hover:border-neutral-700 ${
-                      item.title ? "text-neutral-200" : "text-neutral-500"
-                    } ${item.statusCategory === "done" ? "line-through opacity-60" : ""}`}
-                  >
-                    <span className="block truncate">
-                      {item.title || "Untitled"}
-                    </span>
-                    {rowDate(item, view.dateProperty, tz) && (
-                      <span className="mt-0.5 block text-xs text-neutral-600">
-                        {rowDate(item, view.dateProperty, tz)}
+              {colItems.map((item) => {
+                const rich = projectCards ? boardProjectCard(item, projectCards) : null;
+                if (rich) return <li key={item.id}>{rich}</li>;
+                return (
+                  <li key={item.id}>
+                    <Link
+                      href={`/items/${item.id}`}
+                      className={`block rounded border border-neutral-800 bg-neutral-900 px-2.5 py-1.5 text-sm hover:border-neutral-700 ${
+                        item.title ? "text-neutral-200" : "text-neutral-500"
+                      } ${item.statusCategory === "done" ? "line-through opacity-60" : ""}`}
+                    >
+                      <span className="block truncate">
+                        {item.title || "Untitled"}
                       </span>
-                    )}
-                  </Link>
-                </li>
-              ))}
+                      {rowDate(item, view.dateProperty, tz) && (
+                        <span className="mt-0.5 block text-xs text-neutral-600">
+                          {rowDate(item, view.dateProperty, tz)}
+                        </span>
+                      )}
+                    </Link>
+                  </li>
+                );
+              })}
             </ul>
-          </div>
+          </BoardColumn>
         );
       })}
     </div>
+  );
+}
+
+// --- History spine (2026-09-03) -------------------------------------------
+// Turn a view's rows into the shape TimelineSpine renders. This is the second
+// gatherer for src/lib/timeline-entry.ts (the first is gatherProjectTimeline):
+// one type, one date field, one tier, versus a record's five collections.
+//
+// Deliberately NOT placement.ts. That seam resolves a DRAGGABLE {ymd, minutes}
+// anchor, and the spine is read-only, so going through it would mean converting
+// the anchor back into an instant for no gain. What it does honor is
+// display.startField, the one thing placement offers that the older dateOf does
+// not: a custom date property, which is where a bespoke type (a work log's
+// `logdate`) actually keeps its date.
+const SPINE_KIND: Record<string, TimelineEntry["kind"]> = {
+  event: "meeting",
+  milestone: "milestone",
+  task: "task",
+  note: "note",
+  link: "link",
+};
+
+function spineDate(
+  item: ViewItem,
+  view: ViewDefinition,
+  grain: Grain
+): { date: Date; calendarDay: boolean; hasTime: boolean } | null {
+  const start = view.display?.startField;
+  if (start && "prop" in start) {
+    const props =
+      item.properties && typeof item.properties === "object"
+        ? (item.properties as Record<string, unknown>)
+        : null;
+    const raw = props?.[start.prop];
+    if (typeof raw !== "string" || raw.length < 10) return null;
+    // A withTime prop is a real instant (ADR-254); a day scalar stays a UTC day.
+    const inst = propInstant(raw);
+    if (inst) return { date: inst, calendarDay: false, hasTime: grain === "hour" || grain === "day" };
+    const d = new Date(`${raw.slice(0, 10)}T00:00:00Z`);
+    return Number.isNaN(d.getTime()) ? null : { date: d, calendarDay: true, hasTime: false };
+  }
+  // No explicit start field: the view's date property, or per-item "when" for a
+  // view that never chose one (resolving per item keeps a meeting an instant and
+  // a scheduled day a UTC calendar day, instead of guessing one rule for both).
+  const field: ViewDefinition["dateProperty"] | "endAt" | "noteDate" =
+    start && "field" in start
+      ? start.field
+      : (view.dateProperty ?? (item.meetingAt ? "meetingAt" : "plan"));
+  const date =
+    field === "endAt"
+      ? item.endAt
+      : field === "noteDate"
+        ? item.noteDate
+        : dateOf(item, field);
+  if (!date) return null;
+  const calendarDay = field === "noteDate" || usesUtc(field as ViewDefinition["dateProperty"]);
+  // A time is worth showing when the field carries one AND the reader is looking
+  // at that scale, plus always for a meeting (its time is the point).
+  const hasTime =
+    !calendarDay && (grain === "hour" || grain === "day" || field === "meetingAt");
+  return { date, calendarDay, hasTime };
+}
+
+function viewEntries(
+  items: ViewItem[],
+  view: ViewDefinition,
+  statuses: StatusDef[] | undefined,
+  tz: string,
+  grain: Grain
+): { entries: TimelineEntry[]; undated: TimelineUndated[] } {
+  const entries: TimelineEntry[] = [];
+  const undated: TimelineUndated[] = [];
+  const cols = view.columns ?? [];
+  for (const item of items) {
+    const placed = spineDate(item, view, grain);
+    if (!placed) {
+      undated.push({ id: item.id, title: item.title, badge: item.type });
+      continue;
+    }
+    // The chip follows StatusChip's rule: a not-started status is noise, so it
+    // shows nothing rather than a chip on every row. The view's chosen columns
+    // become the second line, which is how a work-log spine reads its category.
+    const def = statuses?.find((s) => s.key === item.status);
+    const meta = cols.map((c) => columnText(item, c, tz)).filter(Boolean).join(" · ");
+    entries.push({
+      id: item.id,
+      itemId: item.id,
+      date: placed.date,
+      // One tier for a view spine: a homogeneous row set has no natural
+      // hierarchy, and inventing one would guess at the owner's intent. The
+      // two-tier look stays on the record spine, where meetings and milestones
+      // really are the headlines (Brandon, 2026-09-03).
+      tier: "big",
+      kind: SPINE_KIND[item.type] ?? "item",
+      label: def && def.category !== "not_started" ? def.label : "",
+      title: item.title,
+      hasTime: placed.hasTime,
+      calendarDay: placed.calendarDay,
+      done: item.statusCategory === "done",
+      url: item.type === "link" ? item.url : null,
+      meta: meta || undefined,
+    });
+  }
+  entries.sort((a, b) => a.date.getTime() - b.date.getTime());
+  return { entries, undated };
+}
+
+// Where the Today marker goes, by comparing day keys to the app-timezone today
+// the caller already threads in. Pure: no clock read, so a client mount and an
+// SSR pass agree. Undefined `today` (a dashboard widget) means no marker.
+function spineTodayBefore(entries: TimelineEntry[], today: string | undefined, tz: string): number {
+  if (!today) return -1;
+  return entries.findIndex(
+    (e) => (e.calendarDay ? utcKey : tzFmts(tz).key).format(e.date) > today
   );
 }
 
@@ -822,6 +1037,7 @@ export default function ViewRenderer({
   items,
   groupOrder,
   propertyLabels = {},
+  propertyKinds = {},
   boardDraggable = false,
   statuses,
   month,
@@ -832,9 +1048,19 @@ export default function ViewRenderer({
   rollups,
   today,
   tz = DEFAULT_TIMEZONE,
+  groupEdges,
+  projectCards,
 }: {
   view: ViewDefinition;
   items: ViewItem[];
+  // Rich project cards (2026-08-17): card data + element config, resolved by
+  // the page via projectCardsForView for a project-scoped list/board view.
+  // When set, the list layout renders the card grid instead of rows and board
+  // cards carry the full card body; undefined leaves every layout unchanged.
+  projectCards?: ViewProjectCards;
+  // Relation-grouping edges (group by Tags), batch-fetched by the page. Only a
+  // board grouped by a relation role reads it; everything else ignores it.
+  groupEdges?: GroupEdges;
   // The view type's resolved statuses (S2): status chips + board column labels/
   // colors render from these. Resolved by the page from the type's schema.
   statuses?: StatusDef[];
@@ -844,6 +1070,11 @@ export default function ViewRenderer({
   // Labels for the type's custom properties, so a property column shows its
   // label rather than its key. Resolved by the page from the type's schema.
   propertyLabels?: Record<string, string>;
+  // Kinds for the type's custom properties, keyed the same way (ADR-192).
+  // Only the table layout reads it, and only for `phone`/`email`, to make a
+  // contact column dialable. Optional and defaulted, so a caller that hasn't
+  // resolved it renders exactly as before.
+  propertyKinds?: Record<string, string>;
   // Whether a board's cards can be dragged between columns to set their group
   // value. The page decides (only safe for status/urgency/single-select);
   // dashboards leave it false, so a board widget stays read-only.
@@ -898,6 +1129,7 @@ export default function ViewRenderer({
           items={items}
           view={view}
           propertyLabels={propertyLabels}
+          propertyKinds={propertyKinds}
           selectable={selectable}
           tz={tz}
         />
@@ -905,15 +1137,39 @@ export default function ViewRenderer({
     case "board":
       return (
         <BoardLayout
+          groupEdges={groupEdges}
           items={items}
           view={view}
           groupOrder={groupOrder}
           draggable={boardDraggable}
           statuses={statuses}
           tz={tz}
+          projectCards={projectCards}
         />
       );
     case "calendar": {
+      // History (2026-09-03): the vertical spine, ahead of every planner check.
+      // It rides display.mode rather than a sixth view_layout, so it needed no
+      // enum migration and every ViewRenderer mount picks it up unchanged.
+      if ((view.display?.mode ?? DISPLAY_DEFAULTS.mode) === "spine") {
+        const grain = view.display?.zoom ?? DEFAULT_GRAIN;
+        const { entries, undated } = viewEntries(items, view, statuses, tz, grain);
+        return (
+          <div className="mt-4">
+            <TimelineSpine
+              entries={entries}
+              tz={tz}
+              grain={grain}
+              // The view's own Sort direction reads the spine: descending puts
+              // the most recent at the top. One less control to invent.
+              dir={view.sort.dir === "asc" ? "asc" : "desc"}
+              todayBefore={spineTodayBefore(entries, today, tz)}
+              undated={undated}
+              undatedLabel="No date"
+            />
+          </div>
+        );
+      }
       // The Planner (ADR-131, extended by ADR-166): mount the interactive
       // planner whenever the calendar places items on a WRITABLE date field —
       // scheduled/due/plan (calendar days), or a meeting's "When" (meeting_at,
@@ -985,6 +1241,14 @@ export default function ViewRenderer({
         />
       );
     default:
+      // A project-scoped list view renders the rich card grid (2026-08-17) —
+      // the "Recent look" on any tab — in the view's own row order.
+      if (projectCards) {
+        const cards = items
+          .map((i) => projectCards.byId[i.id])
+          .filter((c): c is NonNullable<typeof c> => c != null);
+        return <ProjectCardGrid cards={cards} config={projectCards.config} />;
+      }
       return (
         <ListLayout
           items={items}

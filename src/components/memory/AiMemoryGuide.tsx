@@ -10,9 +10,11 @@
 export const MEMORY_INSTRUCTION_STANZA = `## Ledgr memory
 I keep my durable memories in Ledgr, reachable through its MCP server.
 - At the start of a session, call get_memory_stumps and read the
-  ledgr://guide/memory-protocol resource. The stumps tell you what I've asked you
-  to remember; a stump is a pointer — pull the memory (and follow its links) only
-  when it's relevant to what we're doing.
+  ledgr://guide/memory-protocol resource. That call returns only my pinned
+  memories, the standing rules you need every run. Everything else is on demand:
+  when a person, project or system comes up that you don't know, search_items for
+  it by name with type: "memory". A stump is a pointer — pull the memory (and
+  follow its links) only when it's relevant to what we're doing.
 - When you learn something durable and worth carrying forward — a working
   preference, a fact about a person, a project decision — file it with remember (a
   self-contained title, detail in the body, set kind + horizon, link the
@@ -59,14 +61,21 @@ export default function AiMemoryGuide() {
 
       <H>What keeps a memory &ldquo;always on&rdquo;</H>
       <P>
-        Two dials shape the always-on set. <strong className="text-neutral-200">Kind</strong>
-        {" "}says what a memory is about (who you are, how to work with you, a project,
-        a reference). <strong className="text-neutral-200">Horizon</strong> says how
-        long it stays true: <em>evergreen</em> facts always load; <em>seasonal</em> and
-        {" "}<em>episodic</em> ones fade out of the always-on index after a while but
-        stay searchable. <strong className="text-neutral-200">Pin</strong> a memory to
-        force it always-on regardless. So the assistant carries the durable, important
-        things every session, and reaches for the rest only when needed.
+        One dial, and only one: <strong className="text-neutral-200">Pin</strong>. A
+        pinned memory loads on every single run; nothing else does. Reserve it for
+        standing rules the assistant needs cold and could never find by searching, and
+        keep the pinned list short. Everything unpinned is reached on demand, by
+        searching the person, project or system you are working on.
+      </P>
+      <P>
+        The other two labels describe the memory, they do not decide what loads.
+        {" "}<strong className="text-neutral-200">Kind</strong> says what it is about
+        (who you are, how to work with you, a project, a reference).
+        {" "}<strong className="text-neutral-200">Horizon</strong> says whether it stays
+        true: <em>evergreen</em> indefinitely, <em>seasonal</em> for a while,
+        {" "}<em>episodic</em> for one moment. Old seasonal and episodic memories are
+        marked stale rather than deleted, so &ldquo;this was true once&rdquo; is never
+        lost.
       </P>
 
       <H>Recall is judged, not dumped</H>

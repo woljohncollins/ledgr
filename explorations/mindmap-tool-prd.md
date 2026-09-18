@@ -93,7 +93,7 @@ These are the features that would each force a non-markdown store or a big jump 
 - **Free-form node positions** (drag a node anywhere on an infinite canvas). Would require persisting x/y per node outside the markdown → breaks pure-markdown canonical. v1 uses computed layout only. (If we ever want this, it pairs with `explorations/canvas-drag-and-drop.md` and needs a position sidecar decision.)
 - **Cross-branch links** (a node linked to another node, making it a graph not a tree). Markdown nested lists are trees. Cross-links would lean on the `relation` property kind / wiki-links (ADR-067) and a graph renderer. Later.
 - **Multiple roots** on one canvas.
-- **Per-node color / styling / icons / images.** Pandoc attribute spans could encode some of this in markdown later (the body dialect already allows attribute spans), but not v1.
+- **Per-node color / styling / icons / images.** Pandoc attribute spans could encode some of this in markdown later, but the body dialect does **not** allow them today (ADR-190 removed the claim that it did; nothing parses or renders `{.class}`), so this would need the dialect extended first. Not v1. The existing `<span style>` color HTML is the shipped way to carry per-span styling.
 - **Collaborative / real-time** editing. Single-user (Principle 7).
 
 ## 8. Open questions

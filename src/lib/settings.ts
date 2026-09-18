@@ -3,13 +3,16 @@
 // partial blob always yields a complete, safe object. Owner-scoped like
 // everything else. Surfaces: the highlight-accent color (themed via a CSS var),
 // the Trash retention window, and the nav position.
+import { cache } from "react";
 import { eq } from "drizzle-orm";
 import { getDb } from "@/db";
 import { users } from "@/db/schema";
 import { isIconRef, NAV_ICON_FALLBACK } from "@/lib/nav-icons";
 import { parseListTabs, type Lens } from "@/lib/list-lenses";
 import { parseTocByType, type TocConfig } from "@/lib/toc";
+import { parseCardsByType, type ProjectCardConfig } from "@/lib/project-card-config";
 import { sanitizeLayout, type DeskLayout } from "@/lib/desk/layout";
+import { parseJobOwners, type JobOwners } from "@/lib/job-owners";
 
 // The accent palette offered in settings. Stored as the hex so it can drop
 // straight into the `--accent` CSS variable.
@@ -89,6 +92,31 @@ export const TEXT_SIZE_PX: Record<TextSize, string> = {
 // untouched until he chooses a level). The factors stay modest so the layout
 // never breaks. Distinct from navDensity, which is only how nav slots pack.
 export const UI_DENSITIES = ["compact", "default", "comfortable", "roomy"] as const;
+
+// App theme. `data-theme` on <html> (unset for dark, the :root default);
+// globals.css carries one variable block per theme ([data-theme=…]), and
+// tier 1 of the token layer (ADR-141) routes every neutral utility through those
+// variables, so the flip is one class, not a per-component rewrite. Stored as the
+// plain product word so the value reads the same in the blob and on screen.
+export const THEMES = ["dark", "light", "gray", "sepia"] as const;
+export type Theme = (typeof THEMES)[number];
+export const THEME_LABELS: Record<Theme, string> = {
+  dark: "Dark",
+  light: "Light",
+  gray: "Gray",
+  sepia: "Sepia",
+};
+// Each theme's page color (= its --surface-0 in globals.css). Feeds the
+// <meta name="theme-color"> so the mobile title bar matches the page.
+export const THEME_PAGE_COLOR: Record<Theme, string> = {
+  dark: "#191919",
+  light: "#ffffff",
+  gray: "#2b2b2b",
+  sepia: "#f4ecd8",
+};
+export function isTheme(v: unknown): v is Theme {
+  return typeof v === "string" && (THEMES as readonly string[]).includes(v);
+}
 export type UiDensity = (typeof UI_DENSITIES)[number];
 export const UI_SCALE: Record<UiDensity, number> = {
   compact: 0.9,
@@ -108,6 +136,37 @@ export type SectionStyle = (typeof SECTION_STYLES)[number];
 
 export const NAV_POSITIONS = ["top", "bottom", "left", "right"] as const;
 export type NavPosition = (typeof NAV_POSITIONS)[number];
+
+// The Search slot's href, and what tapping it does (ADR-182). Ledgr has TWO
+// search surfaces — the ⌘K command palette and the full /search page (stacked
+// criteria with per-criterion confidence, ADR-172) — and both used to appear at
+// once: the page as a default nav slot, the palette as a hardcoded button every
+// layout carried. One search icon in the nav, one owner choice about what it
+// opens. ⌘K still opens the palette either way; that's a keyboard shortcut, not
+// an icon, so it costs no space and stays available.
+export const SEARCH_HREF = "/search";
+export const SEARCH_MODES = ["palette", "page"] as const;
+export type SearchMode = (typeof SEARCH_MODES)[number];
+
+// Where an item opens when you click it from a list (Tyler, 2026-08-12). The
+// shape used to be inferred purely from measured width — ≥1280px of content and
+// no right rail meant a docked side panel, otherwise a center popup — so an owner
+// on a wide screen had no way to ask for the popup, and no say in which edge the
+// panel took. It's a reading preference, not a fact about the viewport, so it's a
+// setting now.
+//
+//   auto   — the measured behavior above (the default; nothing changes for anyone
+//            who never touches this)
+//   left   — always a docked panel on the leading edge
+//   right  — always a docked panel on the trailing edge
+//   center — always the center popup, at any width
+//
+// A phone is always the bottom sheet regardless: below the `sm` breakpoint there
+// is no room for a side panel, so the setting is a desktop preference only. A
+// docked side is also skipped when the nav's own rail already occupies that edge,
+// since two panels can't share it — that guard lives in Modal.computeMode.
+export const ITEM_OPEN_MODES = ["auto", "left", "right", "center"] as const;
+export type ItemOpenMode = (typeof ITEM_OPEN_MODES)[number];
 
 // Width of the left/right side rail. Only meaningful when navPosition is
 // left or right: "fat" shows icons + names, "thin" is an icon-only rail,
@@ -220,9 +279,15 @@ export type UserSettings = {
   highlightGradient: string | null;
   trashRetentionDays: number; // 1..365
   navPosition: NavPosition;
+  // Where a clicked item opens: docked panel (left/right), center popup, or the
+  // measured default. Desktop only; a phone is always the bottom sheet.
+  itemOpenMode: ItemOpenMode;
   railSize: RailSize;
   navDensity: NavDensity;
   railAnchor: RailAnchor;
+  // What the nav's Search slot opens (ADR-182): the ⌘K command palette, or the
+  // full /search page. One icon, one choice; ⌘K reaches the palette regardless.
+  searchMode: SearchMode;
   // The configurable middle nav slots (Home/New/More are added at render time).
   navSlots: NavSlotConfig[];
   // Mobile override: null mirrors the desktop slots; an array is a distinct
@@ -251,6 +316,8 @@ export type UserSettings = {
   // textSize (which sizes the prose canvas only).
   uiDensity: UiDensity;
   mobileUiDensity: UiDensity | null;
+  // App theme (dark/light/gray/sepia); data-theme on <html> set in layout.
+  theme: Theme;
   // Item-canvas section style (heavy/light/unified). Maps to the
   // `data-section-style` attribute on <body>; the CanvasSection CSS reads it.
   sectionStyle: SectionStyle;
@@ -264,6 +331,16 @@ export type UserSettings = {
   // Per-type floating-TOC overrides (ADR-114). Keyed by type key; an absent key
   // resolves to DEFAULT_TOC (auto-on). Additive, no migration.
   tocByType: Record<string, TocConfig>;
+  // Per-type project-card element overrides (2026-08-17): which tools a project
+  // card shows wherever cards render (the grid, view lenses, boards). Keyed by
+  // type key ("project" today); an absent key = DEFAULT_PROJECT_CARD. A saved
+  // view can further override via views.display.card. Additive, no migration.
+  cardsByType: Record<string, ProjectCardConfig>;
+  // Type keys the owner offers as TOOLS on widget-home records (2026-08-17):
+  // each becomes a synthetic collection card ("collection:<key>") in Add a
+  // Tool, so a "Chapter" type can be a Chapters card on a Book project.
+  // Toggled from the type's edit page. Additive, no migration.
+  toolTypes: string[];
   // Item ids whose outline the owner has pinned open as a sidebar (ADR-167).
   // Per ITEM, not per type: "I pinned the outline on this long note" is a fact
   // about that note, so it follows the note to every device. Deliberately NOT
@@ -283,6 +360,12 @@ export type UserSettings = {
   // An absent key defaults to on (see NOTIFICATION_KINDS / notificationEnabled),
   // so a new source is on until the owner turns it off. Additive, no migration.
   notificationPrefs: Record<string, boolean>;
+  // Where each arrival path lands (ADR-249). Keyed by source (see
+  // INBOX_SOURCES in src/lib/inbox-sources.ts), value is ONE string: "inbox",
+  // "filed", or a project's id. An absent key = that source's default route,
+  // so a fresh instance keeps the old always-Inbox behavior. Keys are free
+  // text, like notifications.kind, so a new source needs no migration.
+  inboxRoutes: Record<string, string>;
   // The owner's IANA timezone (e.g. "America/Chicago"), defining every "today"
   // boundary and the wall-clock of every displayed time. null = follow the
   // server default (the LEDGR_TIMEZONE env var, else America/New_York), which is
@@ -328,6 +411,28 @@ export type UserSettings = {
   // a time, only when a search actually misses. Same no-migration posture as
   // listTabs/tocByType.
   searchSynonyms: Record<string, string[]>;
+  // Which install runs each EXCLUSIVE scheduled job (src/lib/job-owners.ts).
+  // Lives here rather than in per-machine config precisely BECAUSE settings
+  // sync (ADR-206): one slot per job means two owners cannot be represented,
+  // and every install reads the same answer. Absent = every install behaves as
+  // it did before this existed, so an owner who never touches it changes
+  // nothing. Same no-migration posture as listTabs/searchSynonyms.
+  jobOwners: JobOwners;
+  // Whether a saved YouTube video gets its transcript written into its body.
+  //
+  // WHY IT LIVES HERE, WITH THE SYNCED SETTINGS. There are two questions and
+  // they have different answers. "Do I want my videos transcribed?" is the
+  // owner's own preference, so it belongs in the synced blob and follows them
+  // to every copy. "Which machine actually does the work?" is a separate
+  // question with a control that already exists: the "Runs on" dropdown under
+  // Scheduled work (jobOwners above). Merging the two would mean either every
+  // copy trying (and the cloud failing, since it has no yt-dlp and YouTube
+  // refuses data-center addresses) or the switch being invisible on the very
+  // machine you would go looking for it on.
+  //
+  // Off by default, because the work needs tools that not every machine has:
+  // yt-dlp, and Whisper for a video with no captions.
+  youtubeTranscripts: { enabled: boolean };
 };
 
 // The notification sources (ADR-129), in the order the settings UI lists them.
@@ -363,6 +468,35 @@ function parseNotificationPrefs(raw: unknown): Record<string, boolean> {
   return out;
 }
 
+// Keep only routable values: the two mode words, or a project id. Any other
+// value is dropped, and the source falls back to its default in routeFor.
+function parseInboxRoutes(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof value !== "string") continue;
+    if (value === "inbox" || value === "filed" || SETTINGS_UUID_RE.test(value)) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+// Type keys offered as tools on widget-home records (slug-shaped, deduped,
+// bounded — a malformed entry is dropped, not rejected).
+function parseToolTypes(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry !== "string") continue;
+    if (!/^[a-z][a-z0-9_]*$/.test(entry)) continue;
+    if (out.includes(entry)) continue;
+    out.push(entry);
+    if (out.length >= 50) break;
+  }
+  return out;
+}
+
 // The starting middle slots: Inbox (with its count badge), Tasks, Search. The
 // developer/admin destinations (Views, Items) that used to live in the nav are
 // intentionally not here — they belong in Build, not daily nav.
@@ -382,9 +516,13 @@ export const DEFAULT_SETTINGS: UserSettings = {
   highlightGradient: null,
   trashRetentionDays: 30,
   navPosition: "bottom",
+  // "auto" reproduces the pre-setting behavior exactly, so an owner who never
+  // opens this control sees no change.
+  itemOpenMode: "auto",
   railSize: "fat",
   navDensity: "spread",
   railAnchor: "top",
+  searchMode: "palette",
   navSlots: DEFAULT_NAV_SLOTS,
   mobileNavSlots: null,
   displayName: "",
@@ -394,13 +532,17 @@ export const DEFAULT_SETTINGS: UserSettings = {
   textSize: "base",
   uiDensity: "default",
   mobileUiDensity: null,
+  theme: "dark",
   sectionStyle: "light",
   favorites: [],
   listTabs: {},
   tocByType: {},
+  cardsByType: {},
+  toolTypes: [],
   tocPinnedItems: [],
   relatedLensChoices: {},
   notificationPrefs: {},
+  inboxRoutes: {},
   timezone: null,
   aiMemoryEnabled: false,
   liveContextEnabled: false,
@@ -409,9 +551,11 @@ export const DEFAULT_SETTINGS: UserSettings = {
   toggleBlocksEnabled: true,
   deskWorkspaces: [],
   searchSynonyms: {},
+  jobOwners: {},
+  youtubeTranscripts: { enabled: false },
 };
 
-const SETTINGS_UUID_RE =
+export const SETTINGS_UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Validate one destination, returning null if it's unusable. An unknown icon
@@ -464,6 +608,50 @@ function parseNavSlots(raw: unknown, max: number, fallback: NavSlotConfig[]): Na
     .map(parseNavSlot)
     .filter((s): s is NavSlotConfig => s !== null)
     .slice(0, max);
+}
+
+// Carry a nav slot's presentation (icon, badge) over from the slot already at
+// that href when a write leaves it out. parseNavDestination stamps a missing
+// icon with the generic bullet-list fallback rather than refusing the slot, so
+// ANY caller that read the nav lossily and wrote the whole list back silently
+// re-iconed the owner's entire toolbar. MCP update_nav did exactly that twice
+// (2026-09-14, and again 2026-09-17 on Brandon's rail). #387 taught one reader
+// to return icons; this fixes the seam every writer routes through, so the next
+// lossy caller cannot do it again. Same lesson as ADR-258's type icon/color
+// loss: a lossy read plus a wholesale write destroys a presentation choice.
+// A caller that DOES send an icon still wins, so this never blocks a real edit.
+export function keepNavPresentation(
+  incoming: unknown,
+  current: NavSlotConfig[] | null | undefined
+): unknown {
+  if (!Array.isArray(incoming) || !current?.length) return incoming;
+  // Keyed by href for destinations; a tools group has no route, so by label.
+  const known = new Map<string, { icon: string; badge?: NavBadge }>();
+  const remember = (key: string, v: { icon: string; badge?: NavBadge }) => {
+    if (!known.has(key)) known.set(key, v); // first wins on a duplicate href
+  };
+  for (const s of current) {
+    if (s.type === "tools") {
+      remember(`tools:${s.label}`, { icon: s.icon });
+      for (const c of s.children) remember(c.href, c);
+    } else {
+      remember(s.href, s);
+    }
+  }
+  const fill = (raw: unknown): unknown => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+    const r = { ...(raw as Record<string, unknown>) };
+    const prev = known.get(
+      r.type === "tools" ? `tools:${String(r.label ?? "")}` : String(r.href ?? "")
+    );
+    if (prev) {
+      if (!isIconRef(r.icon)) r.icon = prev.icon;
+      if (r.badge === undefined && prev.badge) r.badge = prev.badge;
+    }
+    if (Array.isArray(r.children)) r.children = r.children.map(fill);
+    return r;
+  };
+  return incoming.map(fill);
 }
 
 // Parse a stored list of item ids (favorites; pinned-outline items): keep only
@@ -564,9 +752,17 @@ export function parseSettings(raw: unknown): UserSettings {
   const navPosition = (NAV_POSITIONS as readonly string[]).includes(r.navPosition as string)
     ? (r.navPosition as NavPosition)
     : DEFAULT_SETTINGS.navPosition;
+  const itemOpenMode = (ITEM_OPEN_MODES as readonly string[]).includes(
+    r.itemOpenMode as string
+  )
+    ? (r.itemOpenMode as ItemOpenMode)
+    : DEFAULT_SETTINGS.itemOpenMode;
   const railSize = (RAIL_SIZES as readonly string[]).includes(r.railSize as string)
     ? (r.railSize as RailSize)
     : DEFAULT_SETTINGS.railSize;
+  const searchMode = (SEARCH_MODES as readonly string[]).includes(r.searchMode as string)
+    ? (r.searchMode as SearchMode)
+    : DEFAULT_SETTINGS.searchMode;
   const navDensity = (NAV_DENSITIES as readonly string[]).includes(r.navDensity as string)
     ? (r.navDensity as NavDensity)
     : DEFAULT_SETTINGS.navDensity;
@@ -610,18 +806,22 @@ export function parseSettings(raw: unknown): UserSettings {
       : (UI_DENSITIES as readonly string[]).includes(r.mobileUiDensity as string)
         ? (r.mobileUiDensity as UiDensity)
         : null;
+  const theme = isTheme(r.theme) ? r.theme : DEFAULT_SETTINGS.theme;
   const sectionStyle = (SECTION_STYLES as readonly string[]).includes(r.sectionStyle as string)
     ? (r.sectionStyle as SectionStyle)
     : DEFAULT_SETTINGS.sectionStyle;
   const favorites = parseItemIdList(r.favorites, FAVORITES_HARD_CAP);
   const listTabs = parseListTabs(r.listTabs);
   const tocByType = parseTocByType(r.tocByType);
+  const cardsByType = parseCardsByType(r.cardsByType);
+  const toolTypes = parseToolTypes(r.toolTypes);
   // ponytail: the whole list is rewritten on every pin toggle. Fine for the
   // dozens of long notes worth pinning; if this ever reaches thousands, move it
   // to its own table (or an items column) rather than growing the settings blob.
   const tocPinnedItems = parseItemIdList(r.tocPinnedItems, TOC_PINNED_HARD_CAP);
   const relatedLensChoices = parseRelatedLensChoices(r.relatedLensChoices);
   const notificationPrefs = parseNotificationPrefs(r.notificationPrefs);
+  const inboxRoutes = parseInboxRoutes(r.inboxRoutes);
   const timezone =
     typeof r.timezone === "string" && isValidTimezone(r.timezone)
       ? r.timezone
@@ -641,6 +841,14 @@ export function parseSettings(raw: unknown): UserSettings {
       : DEFAULT_SETTINGS.toggleBlocksEnabled;
   const deskWorkspaces = parseDeskWorkspaces(r.deskWorkspaces);
   const searchSynonyms = parseSearchSynonyms(r.searchSynonyms);
+  const jobOwners = parseJobOwners(r.jobOwners);
+  // Only an explicit `true` turns it on: an absent, partial or hand-edited blob
+  // leaves the feature off, which is the safe answer on a machine without the
+  // tools to do the work.
+  const youtubeTranscripts = {
+    enabled:
+      (r.youtubeTranscripts as { enabled?: unknown } | undefined)?.enabled === true,
+  };
   return {
     highlightColor,
     highlightGradient,
@@ -648,6 +856,8 @@ export function parseSettings(raw: unknown): UserSettings {
     quickAddHidden,
     trashRetentionDays: days,
     navPosition,
+    itemOpenMode,
+    searchMode,
     railSize,
     navDensity,
     railAnchor,
@@ -660,13 +870,17 @@ export function parseSettings(raw: unknown): UserSettings {
     textSize,
     uiDensity,
     mobileUiDensity,
+    theme,
     sectionStyle,
     favorites,
     listTabs,
     tocByType,
+    cardsByType,
+    toolTypes,
     tocPinnedItems,
     relatedLensChoices,
     notificationPrefs,
+    inboxRoutes,
     timezone,
     aiMemoryEnabled,
     liveContextEnabled,
@@ -675,6 +889,8 @@ export function parseSettings(raw: unknown): UserSettings {
     toggleBlocksEnabled,
     deskWorkspaces,
     searchSynonyms,
+    jobOwners,
+    youtubeTranscripts,
   };
 }
 
@@ -687,19 +903,37 @@ export function effectiveDisplayName(settings: UserSettings, email: string): str
   return local.charAt(0).toUpperCase() + local.slice(1);
 }
 
-export async function getSettings(ownerId: string): Promise<UserSettings> {
+// Wrapped in React cache() the way resolveOwnerState is (owner.ts): the Nav
+// and the page each read settings on every render, which was two identical
+// queries per navigation — two extra HTTP round trips on the neon-http driver.
+// cache() makes every caller in one request await the same promise; in route
+// handlers it is a passthrough, so updateSettings below never reads stale.
+export const getSettings = cache(async (ownerId: string): Promise<UserSettings> => {
   const [row] = await getDb()
     .select({ settings: users.settings })
     .from(users)
     .where(eq(users.id, ownerId));
   return parseSettings(row?.settings);
-}
+});
 
 export async function updateSettings(
   ownerId: string,
   patch: Partial<UserSettings>
 ): Promise<UserSettings> {
-  const next = parseSettings({ ...(await getSettings(ownerId)), ...patch });
+  const before = await getSettings(ownerId);
+  const merged: Record<string, unknown> = { ...before, ...patch };
+  if (patch.navSlots !== undefined) {
+    merged.navSlots = keepNavPresentation(patch.navSlots, before.navSlots);
+  }
+  if (patch.mobileNavSlots !== undefined) {
+    // A first custom phone list is normally built from the desktop one, so fall
+    // back to the desktop slots when no phone list is stored yet.
+    merged.mobileNavSlots = keepNavPresentation(
+      patch.mobileNavSlots,
+      before.mobileNavSlots ?? before.navSlots
+    );
+  }
+  const next = parseSettings(merged);
   await getDb().update(users).set({ settings: next }).where(eq(users.id, ownerId));
   return next;
 }

@@ -271,6 +271,17 @@ export default function RecurrenceControl({
       occurrenceMode: overrides.occurrenceMode ?? rule?.occurrenceMode ?? "virtual",
       maintainDueOffset: rule?.maintainDueOffset,
     });
+    // Editing an existing rule KEEPS its per-date completion log (ADR-183).
+    // makeRecurrence is the fresh-rule constructor, so it starts the log empty;
+    // without this, changing "every Tuesday" to "every other Tuesday" discarded
+    // every "I did this" stamp. Stale dates are inert — every reader filters the
+    // log against the rule's own projection. Matches what MCP set_recurrence
+    // already does (ADR-180). Don't "simplify" this back into makeRecurrence:
+    // its other callers (quick-add, a brand-new rule) want an empty log.
+    if (rule) {
+      next.completeInstances = rule.completeInstances;
+      next.skippedInstances = rule.skippedInstances;
+    }
     void persist(next);
   }
 

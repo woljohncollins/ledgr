@@ -84,6 +84,11 @@ const EXPECTED = [
   // workspace shaping (ADR-102)
   "describe_workspace", "create_type", "update_type", "create_view",
   "update_view", "create_dashboard", "add_widget", "update_nav",
+  // subtasks + recurrence (ADR-180)
+  "list_subtasks", "add_subtasks", "set_recurrence", "update_occurrence",
+  // record/project shaping (ADR-181)
+  "get_record_layout", "set_record_layout", "set_type_layout", "add_to_record",
+  "set_type_statuses",
 ];
 // The always-on tool set (AI Memory tools are gated off for the dummy owner —
 // asserted separately below), so tools/list here is exactly EXPECTED.
@@ -93,8 +98,8 @@ check(
 );
 check("every tool has an object inputSchema", toolList.every((t) => t.inputSchema?.type === "object" && !!t.inputSchema.properties));
 check("every tool has a non-empty description", toolList.every((t) => typeof t.description === "string" && t.description.length > 0));
-check("read tools are flagged readOnly", ["search_items", "list_items", "get_item", "list_types", "list_views", "run_view", "list_templates", "describe_workspace"].every((n) => toolList.find((t) => t.name === n)!.annotations.readOnlyHint === true));
-check("write tools are not readOnly", ["create_item", "update_item", "relate_items", "unrelate_items", "apply_template", "create_type", "update_type", "create_view", "update_view", "create_dashboard", "add_widget", "update_nav"].every((n) => toolList.find((t) => t.name === n)!.annotations.readOnlyHint === false));
+check("read tools are flagged readOnly", ["search_items", "list_items", "get_item", "list_types", "list_views", "run_view", "list_templates", "describe_workspace", "list_subtasks", "get_record_layout"].every((n) => toolList.find((t) => t.name === n)!.annotations.readOnlyHint === true));
+check("write tools are not readOnly", ["create_item", "update_item", "relate_items", "unrelate_items", "apply_template", "create_type", "update_type", "create_view", "update_view", "create_dashboard", "add_widget", "update_nav", "add_subtasks", "set_recurrence", "update_occurrence", "set_record_layout", "set_type_layout", "add_to_record", "set_type_statuses"].every((n) => toolList.find((t) => t.name === n)!.annotations.readOnlyHint === false));
 const bareDefs = await listToolDefs(DUMMY);
 check("listToolDefs strips the handler", bareDefs.every((d) => !("handler" in (d as Record<string, unknown>))));
 // AI Memory (ADR-137) is off for the dummy owner (no settings row → default
@@ -112,9 +117,24 @@ check("invalid message -> -32600", errorOf(invalidRes)?.code === -32600);
 
 // --- resources (ADR-102): the workspace-shaping orientation guide -----------
 const GUIDE_URI = "ledgr://guide/workspace-shaping";
+const USER_GUIDE_URI = "ledgr://guide/using-ledgr";
+const MEMORY_PROTOCOL_URI = "ledgr://guide/memory-protocol";
 const resListRes = await handleMcpMessage({ jsonrpc: "2.0", id: 30, method: "resources/list" }, DUMMY);
 const resList = (resultOf(resListRes).resources ?? []) as { uri: string; name: string; mimeType?: string }[];
-check("resources/list returns the one shaping guide", resList.length === 1 && resList[0].uri === GUIDE_URI && resList[0].mimeType === "text/markdown");
+// The ungated set: the shaping guide (ADR-102) + the user guide (ADR-189). The
+// memory protocol is gated on AI Memory (ADR-137), which is off for the dummy
+// owner, so this is an exact set, not a membership test.
+check(
+  "resources/list returns exactly the two ungated guides",
+  resList.length === 2 &&
+    [GUIDE_URI, USER_GUIDE_URI].every((u) => resList.some((r) => r.uri === u)) &&
+    !resList.some((r) => r.uri === MEMORY_PROTOCOL_URI),
+  resList.map((r) => r.uri).join(", ")
+);
+check(
+  "the shaping guide is served as markdown",
+  resList.find((r) => r.uri === GUIDE_URI)?.mimeType === "text/markdown"
+);
 const resReadRes = await handleMcpMessage({ jsonrpc: "2.0", id: 31, method: "resources/read", params: { uri: GUIDE_URI } }, DUMMY);
 const resContents = (resultOf(resReadRes).contents ?? []) as { uri: string; text: string }[];
 check("resources/read returns the guide markdown", resContents[0]?.uri === GUIDE_URI && resContents[0].text.includes("Shaping a Ledgr workspace"));
@@ -454,12 +474,12 @@ try {
 
   // remember: partial-link hardening — a bad `about` id fails the whole call
   // and creates NO memory (the fix: validate ids before the create).
-  const beforeBad = await getMemoryStumps(ownerId, { includeAll: true });
+  const beforeBad = (await getMemoryStumps(ownerId, { includeAll: true })).stumps;
   await expectErr("remember with a bad about id errors", ownerId, "remember", {
     title: `Should not persist ${stamp}`,
     about: [DUMMY], // a well-formed UUID that isn't an owned item
   });
-  const afterBad = await getMemoryStumps(ownerId, { includeAll: true });
+  const afterBad = (await getMemoryStumps(ownerId, { includeAll: true })).stumps;
   check("failed remember created no memory (no partial write)", afterBad.length === beforeBad.length);
 
   // remember: the happy path links the memory to a real item.
@@ -471,24 +491,31 @@ try {
     about: [entity.id as string],
   });
   check("remember returns a linked memory", (goodMem.about as string[])?.includes(entity.id as string));
-  const stumpsDefault = await getMemoryStumps(ownerId);
-  const remembered = stumpsDefault.find((s) => s.id === goodMem.id);
-  check("get_memory_stumps returns the evergreen memory always-on", !!remembered);
+  const { stumps: stumpsDefault } = await getMemoryStumps(ownerId);
+  check(
+    "an unpinned evergreen memory is NOT always-on (horizon no longer loads, ADR-230)",
+    !stumpsDefault.some((s) => s.id === goodMem.id)
+  );
+  const { stumps: allStumps } = await getMemoryStumps(ownerId, { includeAll: true });
+  const remembered = allStumps.find((s) => s.id === goodMem.id);
+  check("includeAll still returns it", !!remembered);
   check("the stump carries its linked neighbour", !!remembered?.linked.some((l) => l.id === entity.id));
 
-  // Per-horizon aging: seasonal (45d window) vs episodic (10d window). Backdate
-  // updatedAt past the episodic window but inside the seasonal one, then assert
-  // the episodic memory drops out of the default set while the seasonal stays.
-  const elevenDaysAgo = new Date(Date.now() - 11 * 86_400_000);
-  const seasonalMem = await callJson(ownerId, "remember", { title: `Seasonal ${stamp}`, horizon: "seasonal" });
-  const episodicMem = await callJson(ownerId, "remember", { title: `Episodic ${stamp}`, horizon: "episodic" });
-  await db.update(items).set({ updatedAt: elevenDaysAgo }).where(eq(items.id, seasonalMem.id as string));
-  await db.update(items).set({ updatedAt: elevenDaysAgo }).where(eq(items.id, episodicMem.id as string));
-  const agedDefault = await getMemoryStumps(ownerId);
-  check("seasonal memory still always-on at 11 days", agedDefault.some((s) => s.id === seasonalMem.id));
-  check("episodic memory ages out of always-on by 11 days", !agedDefault.some((s) => s.id === episodicMem.id));
-  const agedAll = await getMemoryStumps(ownerId, { includeAll: true });
-  check("aged-out episodic memory still visible via includeAll", agedAll.some((s) => s.id === episodicMem.id));
+  // Pinned is the ONLY always-on dial, and it ignores age entirely: the axes are
+  // orthogonal, so a stale-marked seasonal memory still loads when pinned.
+  const pinnedMem = await callJson(ownerId, "remember", {
+    title: `Pinned rule ${stamp}`,
+    horizon: "seasonal",
+    pinned: true,
+  });
+  await db
+    .update(items)
+    .set({ updatedAt: new Date(Date.now() - 200 * 86_400_000) })
+    .where(eq(items.id, pinnedMem.id as string));
+  const { stumps: pinnedOnly, total } = await getMemoryStumps(ownerId);
+  check("a pinned memory loads however old it is", pinnedOnly.some((s) => s.id === pinnedMem.id));
+  check("the always-on set is pinned and nothing else", pinnedOnly.every((s) => s.pinned));
+  check("total counts the whole store, not just the pinned", total > pinnedOnly.length);
 } finally {
   await db.delete(items).where(eq(items.ownerId, ownerId));
   await db.delete(items).where(eq(items.ownerId, owner2Id));

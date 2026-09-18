@@ -1,0 +1,3 @@
+CREATE INDEX "items_live_updated_idx" ON "items" USING btree ("owner_id","updated_at" desc nulls last) WHERE "items"."deleted_at" is null and "items"."is_template" = false;--> statement-breakpoint
+CREATE INDEX "items_live_type_updated_idx" ON "items" USING btree ("owner_id","type","updated_at" desc nulls last) WHERE "items"."deleted_at" is null and "items"."is_template" = false;--> statement-breakpoint
+CREATE INDEX "items_title_trgm_idx" ON "items" USING gin ("title" gin_trgm_ops);

@@ -17,6 +17,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { openItem } from "@/lib/item-nav";
 import { addDaysYmd, ymdToUtcDate } from "@/lib/recurrence";
 import {
   DEFAULT_DURATION_MINUTES,
@@ -393,7 +394,7 @@ export default function PlannerTimeGrid({
           justResized.current = false;
           return;
         }
-        router.push(`/items/${id}`);
+        openItem(router, id);
       },
     };
   }

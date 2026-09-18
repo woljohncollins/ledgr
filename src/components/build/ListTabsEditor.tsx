@@ -50,6 +50,8 @@ function describe(lens: Lens, views: ViewDefinition[] | null): string {
   }
   if (lens.kind === "calendar") return "Upcoming calendar events to add";
   if (lens.kind === "timeline") return "Upcoming / past by meeting time";
+  if (lens.kind === "board") return "Kanban grouped by status · drag to change";
+  if (lens.kind === "completed") return "Completed work, searchable";
   if ("property" in lens.source) return `Sort by ${lens.source.property}`;
   return FIELD_DESC[lens.source.field];
 }
@@ -59,6 +61,8 @@ function kindBadge(lens: Lens): { label: string; accent: boolean } {
   if (lens.kind === "view") return { label: "Widget", accent: true };
   if (lens.kind === "calendar") return { label: "Calendar", accent: true };
   if (lens.kind === "timeline") return { label: "Agenda", accent: true };
+  if (lens.kind === "board") return { label: "Board", accent: true };
+  if (lens.kind === "completed") return { label: "Completed", accent: true };
   return { label: "Sort", accent: false };
 }
 

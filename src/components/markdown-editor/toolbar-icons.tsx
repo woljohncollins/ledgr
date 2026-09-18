@@ -44,6 +44,9 @@ export const TOOLBAR_ICONS: Record<string, ReactNode> = {
   code: <Svg><polyline points="8 6 3 12 8 18" /><polyline points="16 6 21 12 16 18" /></Svg>,
   table: <Svg><rect x="3" y="4" width="18" height="16" rx="1" /><line x1="3" y1="10" x2="21" y2="10" /><line x1="9" y1="4" x2="9" y2="20" /></Svg>,
   image: <Svg><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="8.5" cy="9.5" r="1.5" /><path d="M21 16l-5-5L5 20" /></Svg>,
+  // attach: the conventional paperclip — upload any file and link it in place
+  // (the image glyph stays image-only; this one takes everything else too).
+  attach: <Svg><path d="M20.5 11.5l-8 8a5 5 0 0 1-7-7l8.5-8.5a3.3 3.3 0 0 1 4.7 4.7l-8.5 8.5a1.7 1.7 0 0 1-2.4-2.4l7.5-7.5" /></Svg>,
   // weblink: the conventional chain-link glyph, for inserting a hyperlink.
   weblink: <Svg><path d="M10 13a5 5 0 0 0 7 0l2-2a5 5 0 0 0-7-7l-1 1" /><path d="M14 11a5 5 0 0 0-7 0l-2 2a5 5 0 0 0 7 7l1-1" /></Svg>,
   // link: copy a deep link to the current line (a block anchor) — a hash glyph,
@@ -94,6 +97,7 @@ export const TOOLBAR_ITEMS: { id: string; label: string }[] = [
   { id: "table", label: "Table" },
   { id: "toggle", label: "Toggle block" },
   { id: "image", label: "Image" },
+  { id: "attach", label: "Attach file" },
   { id: "weblink", label: "Insert link" },
   { id: "link", label: "Copy line link" },
   { id: "color", label: "Text color" },

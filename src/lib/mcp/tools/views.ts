@@ -84,8 +84,10 @@ export const viewTools: McpTool[] = [
       "(relation/tag conditions use anyOf/allOf/noneOf with `values` of item ids). " +
       "Optional `sort` { field, dir } or a property sort " +
       "{ field:'property', propertyKey, numeric }, `grouping` ({ field } or " +
-      "{ propertyKey } for a board), `columns`, and `dateProperty` (which date a " +
-      "calendar/agenda places items on). Example: \"This week's tasks\" = " +
+      "{ propertyKey } for a board), `columns`, `dateProperty` (which date a " +
+      "calendar/agenda places items on), and `display` (calendar mode + grain; " +
+      "layout:'calendar' with display:{ mode:'spine' } is the vertical History " +
+      "timeline, readable on any type). Example: \"This week's tasks\" = " +
       "{ name, layout:'list', filter:{ type:'task', due:'week' } }. Use run_view " +
       "afterward to confirm what it returns.",
     inputSchema: {
@@ -98,6 +100,7 @@ export const viewTools: McpTool[] = [
         grouping: { type: "object", description: "Board/agenda grouping: { field: status|urgency|type|due|scheduled } or { propertyKey } for a custom select." },
         columns: { type: "array", description: "Ordered columns for list/table (advanced). Omit for the layout defaults.", items: { type: "object" } },
         dateProperty: { type: "string", enum: [...DATE_PROPERTIES], description: "Which date a calendar/agenda places items on (default dueDate; meetingAt for events)." },
+        display: { type: "object", description: "Calendar display options: { mode: month|timeline|spine, zoom: hour|day|week|month|quarter|year|halfDecade, startField: { prop: '<date property key>' } }. mode 'spine' is the vertical History timeline; zoom is its grain. startField places items by a type's own date property (e.g. { prop: 'logdate' }) instead of a built-in field." },
       },
       required: ["name", "layout"],
       additionalProperties: false,
@@ -113,7 +116,7 @@ export const viewTools: McpTool[] = [
     title: "Update view",
     description:
       "Edit a saved view by id. REPLACES the view's definition wholesale (name, " +
-      "layout, filter, sort, grouping, columns, dateProperty), so read the " +
+      "layout, filter, sort, grouping, columns, dateProperty, display), so read the " +
       "current one via list_views first and resend the full shape with your " +
       "changes. System views can't be edited. See create_view for the field " +
       "shapes.",
@@ -128,6 +131,7 @@ export const viewTools: McpTool[] = [
         grouping: { type: "object", description: "Board/agenda grouping (see create_view)." },
         columns: { type: "array", description: "Ordered columns for list/table.", items: { type: "object" } },
         dateProperty: { type: "string", enum: [...DATE_PROPERTIES], description: "Calendar/agenda date field." },
+        display: { type: "object", description: "Calendar display options: { mode: month|timeline|spine, zoom: hour|day|week|month|quarter|year|halfDecade, startField: { prop: '<date property key>' } }. mode 'spine' is the vertical History timeline; zoom is its grain. startField places items by a type's own date property (e.g. { prop: 'logdate' }) instead of a built-in field." },
       },
       required: ["id", "name", "layout"],
       additionalProperties: false,

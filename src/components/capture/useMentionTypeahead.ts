@@ -8,6 +8,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { trailingAnchor } from "@/lib/editor/block-anchor";
 import {
   loadTypes,
   parseTypeToken,
@@ -36,6 +37,11 @@ export function detectMentionToken(
   const rawQuery = upto.slice(at + 1);
   if (rawQuery.includes("\n")) return null;
   if (rawQuery.startsWith(" ")) return null; // "@ …" — literal @, not a mention
+  // A trailing block anchor ends the token, the way a newline does: with the
+  // caret parked after "@Roger-Tester ^1nr6v7" the user is at the end of the
+  // line, not editing the mention — and the anchor would otherwise ride into
+  // the query and offer to create an item literally named after it.
+  if (trailingAnchor(rawQuery)) return null;
   return { start: at, rawQuery };
 }
 

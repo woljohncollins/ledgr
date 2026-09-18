@@ -5,11 +5,13 @@ import { asUuid } from "@/lib/api";
 import {
   addWidget,
   createDashboard,
+  getDashboard,
   parseDashboardInput,
   parseWidget,
   WIDGET_KINDS,
 } from "@/lib/dashboards";
 import { ItemError } from "@/lib/items";
+import { updateSettings, type UserSettings } from "@/lib/settings";
 import { dashView } from "./serializers";
 import type { McpTool } from "./wire";
 
@@ -90,6 +92,51 @@ export const dashboardTools: McpTool[] = [
       }
       const updated = await addWidget(ownerId, dashboardId, widget);
       return dashView(updated);
+    },
+  },
+  {
+    name: "assign_dashboards",
+    title: "Assign Home and Today dashboards",
+    description:
+      "Set which dashboard opens as Home (what the owner sees when they open " +
+      "Ledgr) and/or Today, the same as clicking 'Set as Home' / 'Set as Today' " +
+      "at /dashboards. Pass either or both; the one you omit is left alone. Pass " +
+      "null to clear one back to the fixed built-in layout. Create the dashboard " +
+      "first (create_dashboard) — this only assigns an existing one.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        homeDashboardId: { type: ["string", "null"], description: "Dashboard id (UUID) to set as Home, or null to clear it." },
+        todayDashboardId: { type: ["string", "null"], description: "Dashboard id (UUID) to set as Today, or null to clear it." },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    handler: async (ownerId, args) => {
+      const hasHome = "homeDashboardId" in args;
+      const hasToday = "todayDashboardId" in args;
+      if (!hasHome && !hasToday) {
+        throw new ItemError(
+          "bad_request",
+          "pass homeDashboardId and/or todayDashboardId (a dashboard id, or null to clear)"
+        );
+      }
+      const patch: Partial<UserSettings> = {};
+      if (hasHome) {
+        const v = args.homeDashboardId;
+        patch.homeDashboardId = v === null ? null : asUuid(v, "homeDashboardId");
+        if (patch.homeDashboardId) await getDashboard(ownerId, patch.homeDashboardId);
+      }
+      if (hasToday) {
+        const v = args.todayDashboardId;
+        patch.todayDashboardId = v === null ? null : asUuid(v, "todayDashboardId");
+        if (patch.todayDashboardId) await getDashboard(ownerId, patch.todayDashboardId);
+      }
+      const settings = await updateSettings(ownerId, patch);
+      return {
+        homeDashboardId: settings.homeDashboardId,
+        todayDashboardId: settings.todayDashboardId,
+      };
     },
   },
 ];

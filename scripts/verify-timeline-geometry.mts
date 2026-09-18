@@ -10,6 +10,7 @@ import {
   ticks,
   applyTimelineDrag,
 } from "../src/lib/timeline-geometry";
+import { grainBucket, SPINE_GRAINS } from "../src/lib/timeline-grain";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -135,6 +136,83 @@ check(
   check("resizeStart leaves end put", r.end?.ymd === addDays(O, 4), r.end?.ymd);
   const clamp = applyTimelineDrag("resizeStart", O, start, end, 99 * pxPerDay("week"), "week");
   check("resizeStart clamps to end − 1 day", clamp.start.ymd === addDays(O, 3), clamp.start.ymd);
+}
+
+// --- History spine grain buckets (2026-09-03) ----------------------------
+// The bucket key is what decides where a chip breaks, so these guard the two
+// ways it can be wrong: a zone shift sliding an entry into the wrong span, and
+// a boundary (week/quarter/year) landing on the wrong side.
+{
+  const CT = "America/Chicago";
+  const day = (ymd: string) => new Date(`${ymd}T00:00:00Z`);
+
+  // A UTC-midnight calendar day formats in UTC. Reading it in Central time
+  // would put it in the previous day, which is the classic due-date-off-by-one.
+  check(
+    "calendarDay entry keeps its own day",
+    grainBucket(day("2026-07-01"), "day", CT, true).key === "2026-07-01",
+    grainBucket(day("2026-07-01"), "day", CT, true).key,
+  );
+  check(
+    "calendarDay entry keeps its own month",
+    grainBucket(day("2026-07-01"), "month", CT, true).key === "2026-07",
+    grainBucket(day("2026-07-01"), "month", CT, true).key,
+  );
+  // A real instant formats in the owner's zone: 01:30 UTC on Jul 1 is still
+  // Jun 30 in Central, so it belongs to June.
+  check(
+    "instant buckets in the owner's zone",
+    grainBucket(new Date("2026-07-01T01:30:00Z"), "month", CT, false).key === "2026-06",
+    grainBucket(new Date("2026-07-01T01:30:00Z"), "month", CT, false).key,
+  );
+  // Month is the default grain and its label is the one the record timeline has
+  // always shown.
+  check(
+    "month label unchanged",
+    grainBucket(day("2026-09-15"), "month", CT, true).label === "September 2026",
+    grainBucket(day("2026-09-15"), "month", CT, true).label,
+  );
+  // Weeks start Monday, matching the horizontal ruler's week major.
+  check(
+    "week starts Monday",
+    grainBucket(day("2026-07-22"), "week", CT, true).key === "2026-07-20",
+    grainBucket(day("2026-07-22"), "week", CT, true).key,
+  );
+  check(
+    "Sunday belongs to the week before",
+    grainBucket(day("2026-07-26"), "week", CT, true).key === "2026-07-20",
+    grainBucket(day("2026-07-26"), "week", CT, true).key,
+  );
+  check(
+    "Monday is its own week start",
+    grainBucket(day("2026-07-20"), "week", CT, true).key === "2026-07-20",
+    grainBucket(day("2026-07-20"), "week", CT, true).key,
+  );
+  // Quarter/year boundaries.
+  check("quarter boundary Jul 1 = Q3", grainBucket(day("2026-07-01"), "quarter", CT, true).key === "2026-Q3");
+  check("quarter boundary Jun 30 = Q2", grainBucket(day("2026-06-30"), "quarter", CT, true).key === "2026-Q2");
+  check("year boundary", grainBucket(day("2026-01-01"), "year", CT, true).key === "2026");
+  check("halfDecade floors to 5", grainBucket(day("2026-04-01"), "halfDecade", CT, true).label === "2025–2029");
+  // Hour grain on a day-only date has no hour to sit in, so it falls back to the
+  // day rather than inventing a midnight (Brandon: build hour for every type).
+  check(
+    "hour grain falls back to day for a day-only date",
+    grainBucket(day("2026-07-01"), "hour", CT, true).key === "2026-07-01",
+    grainBucket(day("2026-07-01"), "hour", CT, true).key,
+  );
+  check(
+    "hour grain splits a real instant",
+    grainBucket(new Date("2026-07-01T20:15:00Z"), "hour", CT, false).key === "2026-07-01T15",
+    grainBucket(new Date("2026-07-01T20:15:00Z"), "hour", CT, false).key,
+  );
+  // Every grain returns a usable pair, so a stored zoom can never blank a chip.
+  check(
+    "every grain yields a key and a label",
+    SPINE_GRAINS.every((g) => {
+      const b = grainBucket(day("2026-07-01"), g, CT, true);
+      return b.key.length > 0 && b.label.length > 0;
+    }),
+  );
 }
 
 console.log(failures === 0 ? "\nALL PASS" : `\n${failures} FAILED`);

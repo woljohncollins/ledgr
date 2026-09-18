@@ -44,6 +44,40 @@ export function milestonePoints(passed: boolean): PointProgress {
   return { done: passed ? POINT_WEIGHTS.milestone : 0, total: POINT_WEIGHTS.milestone, fraction: passed ? 1 : 0 };
 }
 
+// A milestone's explicit share of the bar (ADR-196): its `points` property read
+// as a PERCENT of the whole project, 0–100. 0 / missing / junk = no share (the
+// milestone stays in the default 5-point pool above).
+export function milestoneSharePct(properties: unknown): number {
+  const raw = (properties as Record<string, unknown> | null)?.points;
+  const n = typeof raw === "string" ? Number(raw) : raw;
+  if (typeof n !== "number" || !Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(n, 100);
+}
+
+export type MilestoneShare = { pct: number; done: boolean };
+
+// Overlay explicit milestone shares onto the pooled points bar (ADR-196). Each
+// share claims its percent of the WHOLE bar ("this milestone done = +30%"), and
+// the pooled items (tasks, meetings, unweighted milestones) split what's left.
+// Shares summing past 100 are scaled down proportionally so the bar stays sane.
+// The result is re-expressed on a 100-point scale (fraction is what the bars
+// render; done/total only need to stay proportional).
+export function applyMilestoneShares(base: PointProgress, shares: MilestoneShare[]): PointProgress {
+  const live = shares.filter((s) => s.pct > 0);
+  if (live.length === 0) return base;
+  const sum = live.reduce((a, s) => a + s.pct, 0);
+  const scale = sum > 100 ? 100 / sum : 1;
+  const shareFrac = Math.min(sum * scale, 100) / 100;
+  const doneFrac = live.reduce((a, s) => a + (s.done ? s.pct * scale : 0), 0) / 100;
+  // No pooled items: the shares ARE the project (their claimed slice rescales
+  // to the whole bar). Otherwise the pool fills the remaining (1 - shares) slice.
+  const fraction =
+    base.total === 0
+      ? doneFrac / shareFrac
+      : (base.fraction ?? 0) * (1 - shareFrac) + doneFrac;
+  return { done: fraction * 100, total: 100, fraction };
+}
+
 export function meetingPoints(past: boolean): PointProgress {
   return { done: past ? POINT_WEIGHTS.meeting : 0, total: POINT_WEIGHTS.meeting, fraction: past ? 1 : 0 };
 }

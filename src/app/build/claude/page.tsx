@@ -432,8 +432,9 @@ export default async function AiAndMcp() {
             Web clipper
           </h2>
           <p className="mt-2 text-sm leading-relaxed text-neutral-400">
-            Save a web page&rsquo;s readable content to your Inbox as a link
-            item, from desktop or mobile. It posts to{" "}
+            Save a web page&rsquo;s readable content as a link item, from
+            desktop or mobile, landing wherever Capture &amp; Inbox routes the
+            Web clipper. It posts to{" "}
             <code className="rounded bg-neutral-800 px-1 py-0.5 font-mono text-xs text-neutral-300">
               /api/machine/capture
             </code>{" "}

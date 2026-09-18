@@ -59,6 +59,45 @@ export type WhereGroup = {
   conditions: WhereCondition[];
 };
 
+// --- Relative value tokens -------------------------------------------------
+// A rule value is normally a literal the owner typed, which makes "today" one
+// thing a view cannot say: a rotation ("show the entry whose day is the 17th")
+// would need editing every morning. These two tokens stand in for a literal and
+// are resolved at QUERY time, in the owner's timezone, by resolveRelativeValue:
+//   "@dayofmonth" → today's date number, "17" — for a day-of-month rotation
+//                   (the Baillie prayers, the attributes of God).
+//   "@today"      → today's calendar day, "2026-09-17" — for a date property.
+// They are ordinary strings, so a stored view definition needs no new shape and
+// an older reader just sees a value that matches nothing.
+export const DAY_OF_MONTH_TOKEN = "@dayofmonth";
+export const TODAY_TOKEN = "@today";
+export const RELATIVE_VALUE_TOKENS: readonly string[] = [DAY_OF_MONTH_TOKEN, TODAY_TOKEN];
+
+export function isRelativeToken(value: string | undefined): boolean {
+  return value != null && RELATIVE_VALUE_TOKENS.includes(value);
+}
+
+// Pure so the SQL builder, the rule builder, and a node check share one
+// resolution. `today` is the reference day (from todayBounds, already in the
+// owner's zone); a non-token value passes through untouched.
+export function resolveRelativeValue(
+  value: string | undefined,
+  today: { y: number; m: number; d: number }
+): string | undefined {
+  if (value === DAY_OF_MONTH_TOKEN) return String(today.d);
+  if (value === TODAY_TOKEN) {
+    return `${today.y}-${String(today.m).padStart(2, "0")}-${String(today.d).padStart(2, "0")}`;
+  }
+  return value;
+}
+
+// Human label for a token, for the rule builder's chip.
+export function relativeTokenLabel(value: string): string {
+  if (value === DAY_OF_MONTH_TOKEN) return "Today's date number";
+  if (value === TODAY_TOKEN) return "Today";
+  return value;
+}
+
 // Ops that need no value at all.
 export const NO_VALUE_OPS: readonly WhereOp[] = ["set", "empty", "checked", "unchecked"];
 // Ops that take a LIST of values (membership).
@@ -70,6 +109,12 @@ export function opsForKind(kind: string): WhereOp[] {
   switch (kind) {
     case "text":
     case "url":
+    // phone/email filter as text (ADR-192): they store the string as typed, so
+    // `contains` over the raw value is the honest operator — a stored
+    // "(309) 555-0142" does not match a "3095550142" search, and pretending
+    // otherwise would need a normalized shadow value nothing writes.
+    case "phone":
+    case "email":
       return ["contains", "eq", "neq", "set", "empty"];
     case "number":
       return ["eq", "neq", "gt", "lt", "gte", "lte", "set", "empty"];
@@ -77,6 +122,10 @@ export function opsForKind(kind: string): WhereOp[] {
       return ["eq", "gt", "lt", "gte", "lte", "set", "empty"];
     case "checkbox":
       return ["checked", "unchecked"];
+    // image (ADR-255) is a picture, not searchable text: the rule builder only
+    // offers "is set" / "is empty".
+    case "image":
+      return ["set", "empty"];
     case "select":
       return ["anyOf", "noneOf", "set", "empty"];
     case "multi_select":

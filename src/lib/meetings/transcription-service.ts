@@ -102,7 +102,12 @@ export async function startAudioTranscription(
   await updateItem(ownerId, transcript.id, { propertyPatch: { transcription: base } });
 
   try {
-    const { jobId } = await provider.submit(storage.publicUrl(att.storageKey), { diarize: true });
+    // A signed URL: the vendor has no Ledgr session and pulls the audio off its
+    // own queue, so it needs a self-authenticating URL that outlives the call.
+    const { jobId } = await provider.submit(
+      await storage.presignDownload(att.storageKey),
+      { diarize: true }
+    );
     await updateItem(ownerId, transcript.id, {
       propertyPatch: { transcription: { ...base, jobId } },
     });

@@ -17,6 +17,17 @@ next-env.d.ts
 # Production
 /dist
 
+# Desktop build output (the Electron/PGlite branch, feat/desktop-electron-pglite).
+# The entries above are root-anchored, so desktop's copies weren't covered and a
+# build left ~19k untracked files (1.2GB) sitting in the working tree after a
+# branch switch. Artifact paths only, never the whole /desktop dir, so real
+# source on that branch still shows up as untracked when it should.
+/desktop/node_modules/
+/desktop/dist/
+/desktop/release/
+/desktop/web/.next/
+/desktop/web/out/
+
 # Environment / secrets (NEVER commit real values; keep .env.example tracked)
 .env
 .env.local
@@ -24,6 +35,16 @@ next-env.d.ts
 .env.development.local
 .env.test.local
 .env.production.local
+
+# Satellite-instance roster: holds other people's connection strings.
+# instances.example.json is the tracked template.
+instances.local.json
+
+# Local-peer supervisor config: holds the sync device token + owner email.
+# supervisor/config.example.json is the tracked template.
+supervisor/config.json
+supervisor/config.*.json
+!supervisor/config.example.json
 
 # Vercel
 .vercel
@@ -76,3 +97,8 @@ plans/
 .github/skills/
 .github/hooks/
 .impeccable/
+ledgr-icon.png
+
+# Throwaway verification scaffolding (scripts/tmp-*.mts). Committed by accident
+# twice; a "git add -A" during a browser check should never sweep these in.
+scripts/tmp-*

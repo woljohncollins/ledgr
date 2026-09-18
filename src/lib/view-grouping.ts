@@ -13,6 +13,10 @@ import type { GroupField, ViewGrouping } from "@/lib/views";
 // listColumns row (the renderer passes the same rows it already has).
 // properties is unknown (jsonb), cast once where it's read below.
 export type GroupableItem = {
+  // Needed by a RELATION grouping (group by tag), whose values don't live on the
+  // row at all — they're `relations` edges, looked up by source id in a map the
+  // caller batch-fetched. Every listColumns row already carries it.
+  id: string;
   status: string;
   urgency: number | null;
   type: string;
@@ -20,6 +24,11 @@ export type GroupableItem = {
   scheduledDate: Date | null;
   properties: unknown;
 };
+
+// Edges for a relation grouping, keyed by source item id — the shape
+// `outgoingRelationsBySource` returns. Only the title is used (it's the group
+// label), but the full ref is accepted so callers can pass their map straight in.
+export type GroupEdges = Map<string, { id: string; title: string }[]>;
 
 export const NONE_GROUP = "none";
 const DUE_ORDER = ["overdue", "today", "this week", "later", "no date"] as const;
@@ -39,19 +48,68 @@ export function dueBucket(dueDate: Date | null, now: Date): string {
   return "later";
 }
 
-// The board column a row falls in. A property grouping reads items.properties:
-// a missing/empty value is NONE_GROUP; an array (multi_select) joins its values
-// so a row shows under its combined membership (kept simple — no fan-out).
+// EVERY group a row belongs to. Most groupings put a row in exactly one column, so
+// this returns a single-entry array; the two multi-valued kinds fan out, so one row
+// shows under EACH of its values (Tyler, 2026-08-12 — "adding a tag to a task
+// self-organizes it").
+//
+// Fan-out is what makes tag grouping useful and it's why this is the plural
+// primitive. The old single-value behavior joined a multi_select's values into one
+// composite column ("work, urgent"), which meant a task tagged two ways got its own
+// private column shared with nothing — the opposite of grouping. A row with no
+// values lands in NONE_GROUP, so nothing is silently dropped from the board.
+//
+// Consequence worth stating: with fan-out the column counts sum to MORE than the
+// row count. That's correct for tags (a task really is in both) and is why callers
+// must not use column totals as an item count.
+export function groupValuesFor(
+  item: GroupableItem,
+  grouping: ViewGrouping,
+  now: Date,
+  edges?: GroupEdges
+): string[] {
+  // Relation grouping (group by tag): the values are edges, not row data.
+  if (grouping && "relationRole" in grouping) {
+    const titles = (edges?.get(item.id) ?? [])
+      .map((e) => e.title.trim())
+      .filter((t) => t !== "");
+    if (titles.length === 0) return [NONE_GROUP];
+    // De-duplicate: two edges to same-titled tags would otherwise make a row
+    // appear twice in one column.
+    return [...new Set(titles)];
+  }
+  if (grouping && "propertyKey" in grouping) {
+    const props = item.properties as Record<string, unknown> | null;
+    const v = props?.[grouping.propertyKey];
+    if (v == null || v === "") return [NONE_GROUP];
+    if (Array.isArray(v)) {
+      const vals = v.map(String).filter((s) => s !== "");
+      return vals.length ? [...new Set(vals)] : [NONE_GROUP];
+    }
+    return [String(v)];
+  }
+  return [groupValueFor(item, grouping, now)];
+}
+
+// The single column a row falls in — the built-in fields, which are all
+// single-valued. Kept as its own function because the board DnD path needs exactly
+// one value per card, and because a status/urgency/date grouping can never fan out.
+// For the multi-valued kinds (relation, multi_select) call groupValuesFor instead;
+// this returns their FIRST group only.
 export function groupValueFor(
   item: GroupableItem,
   grouping: ViewGrouping,
-  now: Date
+  now: Date,
+  edges?: GroupEdges
 ): string {
+  if (grouping && "relationRole" in grouping) {
+    return groupValuesFor(item, grouping, now, edges)[0];
+  }
   if (grouping && "propertyKey" in grouping) {
     const props = item.properties as Record<string, unknown> | null;
     const v = props?.[grouping.propertyKey];
     if (v == null || v === "") return NONE_GROUP;
-    if (Array.isArray(v)) return v.length ? v.map(String).join(", ") : NONE_GROUP;
+    if (Array.isArray(v)) return v.length ? String(v[0]) : NONE_GROUP;
     return String(v);
   }
   const field: GroupField = grouping?.field ?? "status";
@@ -82,6 +140,13 @@ export function boardDropPatch(
   grouping: ViewGrouping,
   col: string
 ): Record<string, unknown> | null {
+  // A relation grouping is NOT droppable. Moving a card between tag columns would
+  // mean deleting one `relations` edge and creating another, which is a different
+  // write from the `/api/items` PATCH this returns — and with fan-out a card can
+  // legitimately sit in several columns at once, so "moved out of Work" is
+  // ambiguous. Returning null makes the drop a no-op (the page also gates which
+  // boards drag), rather than silently writing the wrong thing.
+  if (grouping && "relationRole" in grouping) return null;
   if (grouping && "propertyKey" in grouping) {
     return {
       propertyPatch: { [grouping.propertyKey]: col === NONE_GROUP ? null : col },
@@ -102,7 +167,13 @@ export function orderedGroups(
   knownOrder?: string[]
 ): string[] {
   let known: readonly string[] = [];
-  if (grouping && "propertyKey" in grouping) {
+  if (grouping && "relationRole" in grouping) {
+    // No canonical order for tags — a tag list is open-ended and user-created, so
+    // there's no option list to follow the way a select property has one. Every
+    // present value falls through to the alphabetical tail below, with NONE_GROUP
+    // ("Untagged") pinned last.
+    known = knownOrder ?? [];
+  } else if (grouping && "propertyKey" in grouping) {
     known = knownOrder ?? [];
   } else {
     const field: GroupField = grouping?.field ?? "status";

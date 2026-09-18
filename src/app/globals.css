@@ -1,18 +1,19 @@
 @import "tailwindcss";
 
-/* Dark is the default theme (Brandon's preference); these tokens are the
-   single place a future light theme plugs in (e.g. a .light class on <html>
-   set by a toggle), so pages should style from the tokens or neutral dark
-   classes, never hardcode light backgrounds. Palette shadows Notion's dark
-   mode (Notion-default, CLAUDE.md rule 6). */
+/* Dark is the default theme; the other themes ([data-theme=light|gray|sepia],
+   below) are a data attribute on <html> set by layout.tsx from settings.theme.
+   An attribute, not a class, because Tailwind owns `.sepia` (the filter
+   utility) and would tint the whole page instead of re-skinning it. Pages style from
+   the tokens or neutral classes and never hardcode a background, so one class
+   re-skins the whole app. Palette shadows Notion's dark mode. */
 :root {
-  /* Dark is the only theme today. Setting color-scheme globally makes the
-     browser's native controls (scrollbars, date/select pickers, form fields)
-     render dark unconditionally — so they no longer depend on Tailwind's
-     @layer base winning the CSS load-order race, which is what produced the
-     intermittent dark-scrollbar / native-border "unstyled" flashes. Per-input
-     [color-scheme:dark] utilities scattered through the canvas components are now
-     redundant guards. A future light theme flips this on the .light class. */
+  /* Setting color-scheme globally makes the browser's native controls
+     (scrollbars, date/select pickers, form fields) follow the theme without
+     depending on Tailwind's @layer base winning the CSS load-order race, which
+     is what produced the intermittent dark-scrollbar "unstyled" flashes. Each
+     theme block below sets its own; components must NOT carry a per-input
+     [color-scheme:dark] utility (it would force a black picker on a light
+     theme). */
   color-scheme: dark;
   --background: #191919;
   --foreground: #d4d4d4;
@@ -35,7 +36,7 @@
      S1 · The token layer (ui-refresh, ADR-141)
      -------------------------------------------------------------------
      TWO tiers, both light-mode-ready. Colors live here as variables so a
-     future `.light` class flips them in ONE place instead of touching the
+     theme attribute flips them in ONE place instead of touching the
      ~2,790 hardcoded neutral usages across the app.
 
      TIER 1 — the neutral RAMP as variables. Tailwind v4 lets us redefine
@@ -44,7 +45,7 @@
      / `border-neutral-700` already reads through a runtime variable. The
      DARK values below are Tailwind v4's own neutral oklch values verbatim,
      so this is a PURE INDIRECTION with zero visual change in dark mode;
-     `.light` overrides them (inverted ramp) to flip the whole app at once.
+     a theme block overrides them (e.g. an inverted ramp) to flip the whole app at once.
 
      TIER 2 — a SEMANTIC layer refreshed components style from directly:
        bg-surface-{0,1,2,3}  border-line / border-line-strong
@@ -94,15 +95,57 @@
   --ink-subtle: #6f6f6f; /* meta, timestamps */
   --ink-faint: #4d4d4d; /* faint / disabled */
 
+  /* Text SELECTION (2026-09-08). The browser default paints a band behind the
+     text but leaves the text at its own color, so selecting muted prose
+     (--ink-muted / text-neutral-400) left it dim and hard to read inside the
+     band. Pin selected text to full-strength white and tint the band with the
+     owner's accent. Alpha over a dark page always lands mid-dark, so white
+     stays legible whatever accent is picked; the light themes flip the ink to dark. */
+  --selection-bg: color-mix(in srgb, var(--accent) 40%, transparent);
+  --selection-ink: #ffffff;
+
+  /* Highlighted text (the `mark` rules further down). Same reasoning as
+     --selection-ink: a highlight should make text easier to read, not merely
+     put a color behind it. */
+  --mark-ink: #ffffff;
+
   /* One unified card radius (10px) so panels, rows, and menus agree. */
   --radius-card-px: 0.625rem;
+
+  /* --- Tier 3: the LAYER SCALE (2026-08-12) -------------------------------
+     Named stacking tiers, because ad-hoc z- values had already collided in
+     production: the "@" typeahead and the item "⋯" kebab were BOTH at 50, one
+     portaled to <body> and one in-page, so which painted on top came down to
+     stacking-context accident and their text bled through each other.
+
+     Five tiers, matching what the app already does — this documents and fixes
+     the ties, it doesn't renumber the world:
+
+       --z-sticky   30  in-flow sticky chrome (editor toolbar, planner gutter)
+       --z-chrome   40  app furniture (nav, rail, modal backdrop, bulk bar)
+       --z-modal    50  modals, and menus that live INSIDE the page flow
+       --z-float    60  anchored floating panels PORTALED to <body>
+                        (Popover, every typeahead/listbox, comment popover)
+       --z-top      70  transient over-everything (row context menu, toasts)
+
+     The rule that prevents the next tie: **a panel portaled to <body> belongs
+     at --z-float or above, never at --z-modal.** An in-page menu at 50 and a
+     body-level panel at 50 are not comparable — same number, different
+     stacking context, undefined winner. Reach for a tier, not a number.
+     (Paired with src/lib/floating.ts, which closes the OTHER open panel when
+     one opens, so the layering rarely has to arbitrate at all.) */
+  --z-sticky: 30;
+  --z-chrome: 40;
+  --z-modal: 50;
+  --z-float: 60;
+  --z-top: 70;
 }
 
-/* Light-mode PROOF (S1 mechanism only — the theme itself is a later slice).
-   Flipping this ramp + semantic set is the entire cost of light mode later,
-   because tier 1 routes every neutral utility through these vars. Reachable
-   today only via the dev proof screen at /dev/theme (gated off in prod). */
-.light {
+/* ===== THEMES (settings.theme → data-theme on <html>; dev proof at /dev/theme) =====
+   Flipping the ramp + semantic set is the entire cost of a theme, because tier 1
+   routes every neutral utility through these vars. Each theme's --surface-0 is
+   mirrored in settings.ts THEME_PAGE_COLOR (the mobile title-bar color). */
+[data-theme="light"] {
   color-scheme: light;
   --background: #ffffff;
   --foreground: #1f1f1f;
@@ -128,6 +171,10 @@
   --ink-muted: #5a5a5a;
   --ink-subtle: #8a8a8a;
   --ink-faint: #b5b5b5;
+  /* Alpha over white stays pale, so light mode selects to dark ink. */
+  --selection-bg: color-mix(in srgb, var(--accent) 22%, transparent);
+  --selection-ink: #101010;
+  --mark-ink: #101010;
   /* Canvas-section skin vars (defined further down) flip too. */
   --cs-card: #f7f7f6;
   --cs-border: #e6e4e1;
@@ -135,6 +182,96 @@
   --cs-label: #6a6a6a;
   --cs-count: #7a7a7a;
 }
+
+/* Gray: a softer dark. The dark ramp lifted two stops so nothing goes near
+   black; same shape, lower contrast. Still a dark color-scheme. */
+[data-theme="gray"] {
+  color-scheme: dark;
+  --background: #2b2b2b;
+  --foreground: #dcdcdc;
+  --n-50: oklch(0.985 0 0);
+  --n-100: oklch(0.97 0 0);
+  --n-200: oklch(0.93 0 0);
+  --n-300: oklch(0.88 0 0);
+  --n-400: oklch(0.75 0 0);
+  --n-500: oklch(0.62 0 0);
+  --n-600: oklch(0.52 0 0);
+  --n-700: oklch(0.45 0 0);
+  --n-800: oklch(0.36 0 0);
+  --n-900: oklch(0.30 0 0);
+  --n-950: oklch(0.25 0 0);
+  --surface-0: #2b2b2b;
+  --surface-1: #333333;
+  --surface-2: #3d3d3d;
+  --surface-3: #454545;
+  --line: #3a3a3a;
+  --line-strong: #4a4a4a;
+  --ink: #e6e6e6;
+  --ink-muted: #b0b0b0;
+  --ink-subtle: #8a8a8a;
+  --ink-faint: #666666;
+  --cs-card: #333333;
+  --cs-border: #3e3e3e;
+  --cs-divider: #3a3a3a;
+  --cs-label: #a8a8a8;
+  --cs-count: #9a9a9a;
+}
+
+/* Sepia: the light theme on warm paper. Same inverted ramp as the light theme, tinted
+   toward amber (hue ~75) so grays read as parchment rather than concrete. */
+[data-theme="sepia"] {
+  color-scheme: light;
+  --background: #f4ecd8;
+  --foreground: #3b2f1e;
+  --n-50: oklch(0.25 0.03 75);
+  --n-100: oklch(0.32 0.03 75);
+  --n-200: oklch(0.42 0.03 75);
+  --n-300: oklch(0.50 0.03 75);
+  --n-400: oklch(0.58 0.03 75);
+  --n-500: oklch(0.64 0.03 75);
+  --n-600: oklch(0.74 0.03 75);
+  --n-700: oklch(0.86 0.03 75);
+  --n-800: oklch(0.90 0.03 75);
+  --n-900: oklch(0.93 0.03 75);
+  --n-950: oklch(0.96 0.02 75);
+  --surface-0: #f4ecd8;
+  --surface-1: #ede3cc;
+  --surface-2: #e5dac0;
+  --surface-3: #faf4e6;
+  --line: #e0d5bd;
+  --line-strong: #cdbf9f;
+  --ink: #3b2f1e;
+  --ink-muted: #6b5a3e;
+  --ink-subtle: #8c7b5e;
+  --ink-faint: #b3a58a;
+  --selection-bg: color-mix(in srgb, var(--accent) 22%, transparent);
+  --selection-ink: #2a2014;
+  --mark-ink: #2a2014;
+  --cs-card: #ede3cc;
+  --cs-border: #e0d5bd;
+  --cs-divider: #e8dfc8;
+  --cs-label: #7a6a4c;
+  --cs-count: #8c7b5e;
+}
+
+/* Text colors on a light page. The palette's nine text colors (colors.ts
+   BLOCKNOTE_COLORS) are bright, tuned for a dark canvas, and stored inline in
+   the body as exactly `<span style="color:#hex">`. A light page can't change
+   what is stored, so it repaints by attribute match, one darker shade per
+   color. Highlights need no remap: they are alpha washes that read on either
+   page. `!important` is required: an inline style beats any selector, and
+   repainting the inline color is the whole job here. print-html.ts carries the
+   same table (LIGHT_TEXT_COLORS in colors.ts) for the self-contained share
+   document; keep the two in step. */
+[data-theme="light"] span[style*="color:#a1a1aa"], [data-theme="sepia"] span[style*="color:#a1a1aa"] { color: #52525b !important; }
+[data-theme="light"] span[style*="color:#c08552"], [data-theme="sepia"] span[style*="color:#c08552"] { color: #8a5a2b !important; }
+[data-theme="light"] span[style*="color:#f23a4a"], [data-theme="sepia"] span[style*="color:#f23a4a"] { color: #c81e2e !important; }
+[data-theme="light"] span[style*="color:#fb923c"], [data-theme="sepia"] span[style*="color:#fb923c"] { color: #c2410c !important; }
+[data-theme="light"] span[style*="color:#facc15"], [data-theme="sepia"] span[style*="color:#facc15"] { color: #a16207 !important; }
+[data-theme="light"] span[style*="color:#4ade80"], [data-theme="sepia"] span[style*="color:#4ade80"] { color: #15803d !important; }
+[data-theme="light"] span[style*="color:#60a5fa"], [data-theme="sepia"] span[style*="color:#60a5fa"] { color: #1d4ed8 !important; }
+[data-theme="light"] span[style*="color:#c084fc"], [data-theme="sepia"] span[style*="color:#c084fc"] { color: #7e22ce !important; }
+[data-theme="light"] span[style*="color:#f472b6"], [data-theme="sepia"] span[style*="color:#f472b6"] { color: #be185d !important; }
 
 /* Apply the interface-density scale at the root. font-size: 100% resolves to the
    browser's base (typically 16px), so this multiplies it by --ui-scale and every
@@ -154,9 +291,9 @@ html {
   --font-mono: var(--font-geist-mono);
 
   /* Tier 1 — route every neutral utility through the runtime ramp vars so a
-     single `.light` flip re-themes the whole app. `inline` makes utilities emit
+     single theme block re-themes the whole app. `inline` makes utilities emit
      `var(--n-800)` directly (not a second indirection), so overriding --n-* on
-     .light is all it takes. Dark values are Tailwind's own, so nothing shifts. */
+     a theme block is all it takes. Dark values are Tailwind's own, so nothing shifts. */
   --color-neutral-50: var(--n-50);
   --color-neutral-100: var(--n-100);
   --color-neutral-200: var(--n-200);
@@ -189,6 +326,14 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Selected text reads at full strength everywhere (see --selection-ink above).
+   A Tailwind `selection:*` utility on a subtree still wins on specificity, so a
+   surface can opt out (e.g. the /items/[id]/markdown source view). */
+::selection {
+  background: var(--selection-bg);
+  color: var(--selection-ink);
 }
 
 /* Nav clearance (v6). The nav writes --nav-pt/pb/pl/pr on <body> (see
@@ -226,20 +371,56 @@ body {
   }
 }
 
-/* A highlight is a BACKGROUND mark; it must never claim the foreground. The UA
-   stylesheet gives <mark> its own `color` (black), and an element's own color
-   beats one inherited from an ancestor — so a highlight applied over colored text
-   (`<span style="color:red"><mark>verse</mark></span>`) silently turned that text
-   black. The editor emits only `background-color` on a mark (extensions.ts), so
-   this one rule is all that stood between "highlight layers over color" and
-   "highlight destroys color".
+/* A highlight brightens its own text, and still never overrides text that
+   carries a color of its own. Those are two rules, and the order matters.
 
-   Load-bearing for the booth export (src/lib/editor/booth-export.ts), where a
-   highlight means "put this on the screen" and has to coexist with the text color
-   that means "this is Scripture". Same fix lives in print-html.ts's HL_CSS, which
-   is a separate self-contained stylesheet. Don't drop either one. */
+   The old rule here was a flat `mark { color: inherit }`, for a good reason kept
+   below. But "inherit" meant highlighted text sat at whatever the surrounding
+   prose was — a muted `--foreground`, or `#a3a3a3` inside a blockquote
+   (markdown-editor.css) — so highlighting text made it no easier to read than
+   the line above it, which is the opposite of what a marker pen is for
+   (Tyler, 2026-09-09, first noticed on a highlight inside a quote).
+
+   THE RULE THAT STAYS, and why it can't just be deleted: the UA stylesheet gives
+   <mark> its own `color` (black), and an element's own color beats one inherited
+   from an ancestor — so a highlight over colored text
+   (`<span style="color:red"><mark>verse</mark></span>`) silently turned that
+   verse black. A highlight owns the FILL channel. It is load-bearing for the
+   booth export (src/lib/editor/booth-export.ts), where a highlight means "put
+   this on the screen" and has to coexist with the text color that means "this is
+   Scripture": repainting Scripture would destroy the distinction the preacher is
+   reading from.
+
+   So the claim is narrowed rather than dropped. A bare highlight takes the
+   bright ink; a highlight anywhere inside a text-color span goes back to
+   inheriting, so the color wins. The other nesting order
+   (`<mark><span style="color:red">`) needs no rule: the span's own inline style
+   already beats the mark's. The editor emits text color as exactly
+   `<span style="color:#hex">` (extensions.ts), which is what the attribute
+   selector matches.
+
+   The self-contained print/share/offline document (print-html.ts's HL_CSS)
+   deliberately does NOT get this: it prints black-on-white, where bright ink
+   would come out invisible on paper. Its `color:inherit` stays. */
 mark {
+  color: var(--mark-ink);
+}
+span[style*="color"] mark {
   color: inherit;
+}
+
+/* The accent highlight ("My highlight", colors.ts). Its FILL rides the inline
+   style the body already carries — `color-mix(in srgb, var(--accent) 40%,
+   transparent)` — so a solid accent needs no rule here at all; this is only the
+   image channel, which a `background-color` cannot hold.
+
+   A GRADIENT accent is a CSS image, so it can only arrive this way. layout.tsx
+   sets --accent-highlight-image only when the owner actually picked a gradient
+   (it carries a page-colored veil so the gradient reads as a highlight wash
+   rather than a solid band under the text); with a solid accent the var is
+   unset and this falls back to `none`, leaving the inline color alone. */
+mark.hl-accent {
+  background-image: var(--accent-highlight-image, none);
 }
 
 /* Circular checkbox used across the app — task done-toggles and Build/config

@@ -32,6 +32,11 @@ const CLERK_ALLOWED = new Set([
   "src/proxy.ts",
   "src/lib/auth/clerk.ts",
   "src/lib/auth/provider.tsx",
+  // The client half of the seam: the one hook reporting whether the BROWSER
+  // thinks a session exists, for the server/client disagreement check
+  // (NavAuthHeal, ADR-216). It landed importing Clerk directly and tripped
+  // this guard; the fix was a seam file, not a wider allowlist.
+  "src/lib/auth/client.ts",
   "src/app/sign-in/[[...sign-in]]/page.tsx",
 ]);
 const clerkImporters = files.filter((p) => /from\s+["']@clerk\/nextjs/.test(read(p)));
@@ -70,12 +75,47 @@ check("StorageProvider interface exists", existsSync("src/lib/storage/types.ts")
 // scheduler swappable: Vercel cron / GitHub Actions / a local cron all call
 // the same authenticated URL. A new unauthenticated machine route would both
 // be a security hole and break the local-cron swap.
+//
+// There are THREE machine-auth helpers, and this guard once only knew one: the
+// original `verifyMachineToken()`; `verifyApiToken()` + `resolveMachineOwner`
+// (the ADR-117 OAuth shim, added in db6ae4b — four routes use it and were
+// reported as unauthenticated for months, a false alarm a security guard can't
+// afford, so it was taught); and `verifySyncDevice()` (the sync spine's
+// DB-backed device tokens, src/lib/sync/auth.ts — same sha256 +
+// timingSafeEqual as machine.ts, hash stored on a revocable sync_peers row per
+// the plan's decision 15). ADR-224 added the last two: `verifyMachineRequest()`
+// and `verifyApiRequest()` (src/lib/auth/credentials.ts), the async resolvers
+// that try the env token first and then a minted api_credentials row — the
+// routes now call these, and the two sync names remain because /api/mcp and
+// the sync route still call them directly. Accept exactly these names, nothing
+// looser: a new machine route must use one of them or extend this list
+// deliberately.
+//
+// Checked PER EXPORTED HANDLER rather than per file, which is stricter than
+// before: the old file-level grep would pass a file whose GET was gated and whose
+// newly-added POST was not. Segmenting on `export async function` is enough
+// because each machine handler authenticates inline, at its top.
+const AUTH_HELPER =
+  /verifyMachineRequest\s*\(|verifyApiRequest\s*\(|verifyMachineToken\s*\(|verifyApiToken\s*\(|verifySyncDevice\s*\(/;
 const machineRoutes = files.filter((p) => /^src\/app\/api\/machine\/.*\/route\.ts$/.test(p));
-const unauthed = machineRoutes.filter((p) => !/verifyMachineToken\s*\(/.test(read(p)));
+const unauthedHandlers: string[] = [];
+let handlerCount = 0;
+for (const p of machineRoutes) {
+  const src = read(p);
+  // [0] is the imports/preamble before the first handler — not a handler itself.
+  const segments = src.split(/export\s+async\s+function\s+/).slice(1);
+  for (const seg of segments) {
+    const verb = /^([A-Z]+)/.exec(seg)?.[1] ?? "?";
+    handlerCount++;
+    if (!AUTH_HELPER.test(seg)) unauthedHandlers.push(`${p}:${verb}`);
+  }
+}
 check(
-  "every /api/machine endpoint verifies a machine token",
-  machineRoutes.length > 0 && unauthed.length === 0,
-  unauthed.length ? `missing: ${unauthed.join(", ")}` : `${machineRoutes.length} endpoints`
+  "every /api/machine handler verifies a machine token",
+  machineRoutes.length > 0 && handlerCount > 0 && unauthedHandlers.length === 0,
+  unauthedHandlers.length
+    ? `missing: ${unauthedHandlers.join(", ")}`
+    : `${handlerCount} handlers across ${machineRoutes.length} routes`
 );
 
 // The scheduled jobs all point at machine endpoints (the scheduler interface).

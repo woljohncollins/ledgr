@@ -10,6 +10,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import TemplateApplyDialog from "@/components/home/TemplateApplyDialog";
+import { openItem } from "@/lib/item-nav";
 
 type TemplateOpt = {
   id: string;
@@ -68,7 +69,7 @@ export default function NewItemButton({ type }: { type: string }) {
       if (!res.ok) throw new Error(String(res.status));
       const { item } = await res.json();
       setMenuOpen(false);
-      router.push(`/items/${item.id}`);
+      openItem(router, item.id);
       // The list page stays mounted under the intercepting modal, so this
       // button never remounts on its own — reset it here.
       setState("idle");

@@ -6,6 +6,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { openItem } from "@/lib/item-nav";
 
 export default function TemplateApplyDialog({
   templateId,
@@ -49,7 +50,7 @@ export default function TemplateApplyDialog({
       }
       const { item } = (await res.json()) as { item: { id: string } };
       onClose(); // clear the picker state before navigating so it doesn't linger
-      router.push(`/items/${item.id}`);
+      openItem(router, item.id);
       router.refresh();
     } catch {
       setError("failed (offline?)");

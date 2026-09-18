@@ -4,7 +4,7 @@
 // count.
 //   npx tsx scripts/verify-word-count.mts
 import { wordCountOf } from "../src/lib/body";
-import { publishBodyMarkdown, peekWordCount } from "../src/lib/word-count";
+import { publishBodyMarkdown, peekWordCount, peekWordCountPerTab } from "../src/lib/word-count";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -122,6 +122,16 @@ publishBodyMarkdown("item-b", "five six");
 await new Promise((r) => setTimeout(r, 1200));
 check("scoped to the publishing item", peekWordCount("item-b") === 2);
 check("previous item falls back to its server count", peekWordCount("item-a") === null);
+check("a whole-body publish is not tab-scoped", peekWordCountPerTab("item-b") === false);
+
+// Tabbed bodies (ADR-095) count the ACTIVE tab: TabbedBody publishes the active
+// section after the whole-body publish from the same change, and the later call
+// wins, so the chrome shows that tab's count labeled "(this tab)".
+publishBodyMarkdown("item-c", "<!-- tab: A -->\none two\n<!-- tab: B -->\nthree four five");
+publishBodyMarkdown("item-c", "three four five", { perTab: true });
+await new Promise((r) => setTimeout(r, 1200));
+check("the active tab's count lands, not the whole body's", peekWordCount("item-c") === 3);
+check("and it is marked tab-scoped", peekWordCountPerTab("item-c") === true);
 
 console.log(failures === 0 ? "\nAll checks passed." : `\n${failures} check(s) failed.`);
 process.exit(failures === 0 ? 0 : 1);

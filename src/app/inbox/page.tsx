@@ -82,6 +82,25 @@ export default async function Inbox() {
           <QuickCapture typeOptions={typeRows} />
         </div>
 
+        {/* Empty state (ADR-249): an empty queue is now ambiguous — you may have
+            triaged everything, or you may have routed every arrival path
+            somewhere else — so say what feeds this page and where that is set. */}
+        {inboxItems.length === 0 && (
+          <p className="mt-6 ui-meta text-ink-subtle">
+            Things land here when an arrival path is routed to the Inbox: quick
+            capture, your phone&rsquo;s share sheet, the web clipper, email in,
+            Todoist, new items from an @-mention, and Claude. Each one can queue
+            here, file itself straight away, or drop into a project.{" "}
+            <Link
+              href="/build/capture"
+              className="underline decoration-dotted underline-offset-2 hover:text-ink"
+            >
+              Set that up in Capture &amp; Inbox
+            </Link>
+            .
+          </p>
+        )}
+
         {inboxItems.length > 0 && (
           <SelectionProvider ids={inboxItems.map((item) => item.id)}>
             <SelectModeToggle />

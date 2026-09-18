@@ -5,10 +5,11 @@
 // returned are { id, label }, which Mention's default command maps straight
 // onto the node's attrs.
 //
-// Create-on-miss (ADR-067): when the typed name matches nothing, a "Create"
-// row makes an `unmarked` item (inbox=true, triaged later) and inserts a
-// mention to it. The relation edge is NOT written here — mention edges are
-// body-owned and diff-synced on save (src/lib/mentions.ts); inserting the
+// Create-on-miss: when the typed name matches nothing, the picker offers one
+// TYPED create row per type it could be (person / project / Unsorted — see
+// src/lib/mention-create.ts, which is also the shared POST) and inserts a mention
+// to whichever is picked. The relation edge is NOT written here — mention edges
+// are body-owned and diff-synced on save (src/lib/mentions.ts); inserting the
 // mention node and letting the save create the edge keeps that contract.
 "use client";
 
@@ -21,6 +22,14 @@ import {
   type TypeMeta,
 } from "@/components/search/type-token";
 import { formatPassageRef, parsePassageRef } from "@/lib/passages/ref";
+import {
+  createMentionTarget,
+  createRowText,
+  createTargets,
+  type CreateTarget,
+} from "@/lib/mention-create";
+import { announceFloatingOpen } from "@/lib/floating";
+import { trailingAnchor } from "@/lib/editor/block-anchor";
 
 // `type` is the target's type key; it rides onto the inserted mention node's
 // attrs so the chip is glyphed instantly (the default Mention command copies the
@@ -95,23 +104,14 @@ async function fetchItems(query: string, selfId?: string): Promise<Item[]> {
     .map((it) => ({ id: it.id, label: it.title || "Untitled", type: it.type ?? null }));
 }
 
-// Create-on-miss item: the token's type when one is active (so "@/person Jane"
-// creates a person), else `unmarked`. Flagged for the Inbox either way.
-async function createItem(title: string, type: string): Promise<Item | null> {
-  try {
-    const res = await fetch(`/api/items`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type, title, inbox: true }),
-    });
-    if (!res.ok) return null;
-    const { item } = (await res.json()) as {
-      item: { id: string; title: string; type?: string | null };
-    };
-    return { id: item.id, label: item.title || title, type: item.type ?? type };
-  } catch {
-    return null;
-  }
+// Create-on-miss item, through the shared creator so this surface can't drift
+// from the other four. Mapped onto the picker's { id, label, type } row shape.
+async function createItem(
+  title: string,
+  target: CreateTarget
+): Promise<Item | null> {
+  const made = await createMentionTarget(title, target);
+  return made ? { id: made.id, label: made.title, type: made.type } : null;
 }
 
 export function createMentionSuggestion(
@@ -183,7 +183,11 @@ export function createMentionSuggestion(
         !items.some(
           (it) => it.label.trim().toLowerCase() === effectiveQuery().toLowerCase()
         );
-      const rowCount = () => items.length + (showCreate() ? 1 : 0);
+      // The create rows to offer: one per type the name could become when nothing
+      // narrows it, or the single scoped type when "/person" is active.
+      const targets = (): CreateTarget[] =>
+        showCreate() ? createTargets(types, token()?.type ?? null) : [];
+      const rowCount = () => items.length + targets().length;
 
       // Insert the chosen row. A passage candidate inserts a passage node at the
       // captured range (the mention `command` only makes mention nodes); anything
@@ -220,14 +224,15 @@ export function createMentionSuggestion(
         }
       };
 
-      // Create the unmarked item, then insert the mention to it. Guarded
+      // Create the item as the picked type, then insert the mention to it. Guarded
       // against double-submit; cmd is captured at call time.
-      const runCreate = async () => {
+      const runCreate = async (target: CreateTarget) => {
         const title = effectiveQuery();
         if (creating || !title) return;
         creating = true;
         const insert = cmd;
-        const made = await createItem(title, token()?.type.key ?? "unmarked");
+        paint(); // show "Creating …" on the row that was picked
+        const made = await createItem(title, target);
         creating = false;
         if (made && insert) insert(made);
         else if (!made) paint(); // surface that nothing happened; let them retry
@@ -273,24 +278,32 @@ export function createMentionSuggestion(
           });
           popup!.appendChild(row);
         });
-        if (showCreate()) {
-          const i = items.length;
+        // Create-on-miss: one row per type the name could become, each carrying
+        // that type's glyph and label so the block reads as a question with
+        // answers rather than a blind "Create". Matches the hit rows' shape (and
+        // the textarea picker's, mention-ui.tsx) on purpose.
+        targets().forEach((target, n) => {
+          const i = items.length + n;
           const row = document.createElement("button");
           row.type = "button";
           row.className =
             "ledgr-mention-item ledgr-mention-create" +
             (i === selected ? " is-selected" : "");
-          const kind = token()?.type.label;
-          const verb = kind ? `Create ${kind}` : "Create";
-          row.textContent = creating
-            ? `Creating “${effectiveQuery()}”…`
-            : `${verb} “${effectiveQuery()}”`;
+          const meta = types.find((t) => t.key === target.key);
+          row.innerHTML = `<span class="ledgr-mention-item-icon">${mentionGlyphSvg(
+            { type: target.key, icon: meta?.icon ?? target.icon, statusCategory: null },
+            16
+          )}</span><span class="ledgr-mention-item-label">${escapeHtml(
+            createRowText(effectiveQuery(), creating)
+          )}</span><span class="ledgr-mention-item-type">${escapeHtml(
+            target.label
+          )}</span>`;
           row.addEventListener("mousedown", (e) => {
             e.preventDefault();
-            void runCreate();
+            void runCreate(target);
           });
           popup!.appendChild(row);
-        }
+        });
       };
 
       const place = (rect: DOMRect | null) => {
@@ -311,6 +324,11 @@ export function createMentionSuggestion(
         popup = document.createElement("div");
         popup.className = "ledgr-mention-popup";
         document.body.appendChild(popup);
+        // Close any other open floating panel (the item "⋯" kebab was the one
+        // that overlapped this in practice). Announced on MOUNT, not on every
+        // update: this popup opens from a keystroke, so nothing else's
+        // outside-click listener would ever fire to dismiss it.
+        announceFloatingOpen("editor-mention");
         // Clicking anywhere outside the popup dismisses it (capture phase so we
         // see the click before it's swallowed; row mousedowns live inside).
         onDocPointer = (e: MouseEvent) => {
@@ -324,7 +342,14 @@ export function createMentionSuggestion(
       // *inside* a query through ("@Elder Board"); those queries never BEGIN
       // with a space, so a leading space is the unambiguous "this isn't a
       // mention" signal.
-      const isLiteralAt = (query: string) => query.startsWith(" ");
+      //
+      // A trailing block anchor closes it for the same reason: with the caret
+      // after "@Roger-Tester ^1nr6v7" the user is at the end of the line, not
+      // editing the mention, and the anchor rode into the query — the picker
+      // offered to create an item literally named "Roger-Tester ^1nr6v7", and
+      // accepting it also swallowed the anchor into the mention's replace range.
+      const isLiteralAt = (query: string) =>
+        query.startsWith(" ") || trailingAnchor(query) !== null;
 
       return {
         onStart: (props: SuggestionProps<Item>) => {
@@ -369,6 +394,10 @@ export function createMentionSuggestion(
           place(props.clientRect?.() ?? null);
         },
         onKeyDown: ({ event }) => {
+          // No popup, no keys: the plugin stays active while the query is one we
+          // deliberately refuse (a literal "@ ", a trailing anchor), and without
+          // this Enter would insert a mention nobody could see being chosen.
+          if (!popup) return false;
           const count = Math.max(rowCount(), 1);
           if (event.key === "ArrowDown") {
             selected = (selected + 1) % count;
@@ -384,8 +413,9 @@ export function createMentionSuggestion(
             if (selected < items.length) {
               const it = items[selected];
               if (it) select(it);
-            } else if (showCreate()) {
-              void runCreate();
+            } else {
+              const target = targets()[selected - items.length];
+              if (target) void runCreate(target);
             }
             return true;
           }

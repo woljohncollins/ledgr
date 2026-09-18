@@ -7,6 +7,7 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { openItem } from "@/lib/item-nav";
 
 export default function SaveAsTemplateButton({
   itemId,
@@ -57,7 +58,7 @@ export default function SaveAsTemplateButton({
       const { template } = (await res.json()) as { template: { prototypeItemId: string } };
       setOpen(false);
       // Open the new prototype in the canvas to refine the template.
-      router.push(`/items/${template.prototypeItemId}`);
+      openItem(router, template.prototypeItemId);
       router.refresh();
     } catch {
       setError("failed (offline?)");

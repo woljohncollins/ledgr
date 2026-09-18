@@ -1,0 +1,21 @@
+{
+  "//": "Roster of satellite instances: other people's deploys of this codebase. Copy to instances.local.json (gitignored) and fill in. Used by `npm run instance:new` and `npm run instances:sync`. Most instances update themselves from Build → Updates; this file is for provisioning a new one and for pushing a migration-carrying change out to several at once.",
+  "upstream": "strategicli/ledgr",
+  "branch": "main",
+  "instances": [
+    {
+      "name": "michelle",
+      "fork": "michellecollins1212-rosanne/ledgr",
+      "ownerEmail": "the-address-she-signs-in-with@example.com",
+      "appUrl": "https://michelle-ledgr.vercel.app",
+      "databaseUrl": "postgresql://USER:PASSWORD@HOST-pooler.REGION.aws.neon.tech/ledgr?sslmode=require"
+    },
+    {
+      "name": "miles",
+      "fork": "milesharrisoncollins-sketch/ledgr",
+      "ownerEmail": "the-address-he-signs-in-with@example.com",
+      "appUrl": "https://miles-ledgr.vercel.app",
+      "databaseUrlEnv": "MILES_DATABASE_URL"
+    }
+  ]
+}

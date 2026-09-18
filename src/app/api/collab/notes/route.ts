@@ -5,14 +5,16 @@
 // concurrent edit. Owner-guarded like every other route.
 import { NextResponse } from "next/server";
 import { errorResponse, requireOwner } from "@/lib/api";
-import { getGithubConfig, readNotes, writeNotes, GithubError } from "@/lib/github/client";
+import { hasGithubToken, readNotes, writeNotes, GithubError } from "@/lib/github/client";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   const owner = await requireOwner();
   if (owner instanceof NextResponse) return owner;
-  if (!getGithubConfig()) return NextResponse.json({ configured: false, markdown: "", sha: null });
+  // Notes are shared by COMMITTING them, so reading them without a token would
+  // show a scratchpad nobody here can write to; keep the whole surface gated.
+  if (!hasGithubToken()) return NextResponse.json({ configured: false, markdown: "", sha: null });
   try {
     const notes = await readNotes();
     return NextResponse.json({ configured: true, ...notes });
@@ -24,7 +26,7 @@ export async function GET() {
 export async function PUT(request: Request) {
   const owner = await requireOwner();
   if (owner instanceof NextResponse) return owner;
-  if (!getGithubConfig()) {
+  if (!hasGithubToken()) {
     return NextResponse.json({ error: "GitHub not configured" }, { status: 503 });
   }
   let body: { markdown?: unknown; sha?: unknown };

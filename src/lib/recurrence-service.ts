@@ -33,7 +33,8 @@ import {
 import { appTimezoneSync, ymdInZone } from "@/lib/today";
 import { defaultStatusKey } from "@/lib/status";
 import { statusSchemaForType } from "@/lib/status-schema";
-import { recomputeRelativeChildren } from "@/lib/relative-subtask-service";
+import { shiftChildDates } from "@/lib/relative-subtask-service";
+import { dayDelta, isDuePinned, shiftDay } from "@/lib/date-anchor";
 
 // The relation role that links a materialized occurrence (source) to its series
 // (target). A role, not parent_id, so the series' own canvas subtasks stay its
@@ -93,8 +94,18 @@ async function advanceSeriesRow(
     recurrence: res.rule,
   };
 
+  // The deadline rides the occurrence forward (ADR-253). ADR-076 did this behind
+  // `maintainDueOffset`, default OFF and settable only over MCP, which is why a
+  // recurring task's due date froze at its first occurrence and read as a stale
+  // overdue forever. Anchoring is now the default; pinning the deadline is the
+  // opt-out. The legacy flag is NOT consulted here: `parseRecurrence` collapses a
+  // stored `false` into `undefined`, so it is indistinguishable from the unset
+  // default that every existing task carries, and honoring it would preserve the
+  // very bug this replaces. `set_recurrence` translates the flag into a pin at the
+  // write boundary instead, where an explicit `false` still carries intent.
   let dueDate = series.dueDate;
-  if (res.next && rule.maintainDueOffset && series.dueDate && series.scheduledDate) {
+  const duePinned = isDuePinned(series.properties as Record<string, unknown> | null);
+  if (res.next && !duePinned && series.dueDate && series.scheduledDate) {
     const delta = daysBetween(dateToYmdUtc(series.scheduledDate), res.next);
     dueDate = ymdToUtcDate(addDaysYmd(dateToYmdUtc(series.dueDate), delta));
   }
@@ -121,12 +132,11 @@ async function advanceSeriesRow(
     })
     .where(and(eq(items.id, series.id), eq(items.ownerId, ownerId)))
     .returning();
-  // Relative subtasks shift with the series' scheduled date (S5, ADR-085).
-  await recomputeRelativeChildren(
-    ownerId,
-    series.id,
-    updated.scheduledDate ? dateToYmdUtc(updated.scheduledDate) : null
-  );
+  // The whole checklist advances with the series (ADR-253): every unpinned dated
+  // descendant moves by the same number of days the occurrence just moved, so
+  // next cycle's subtasks aren't still dated to the last one.
+  const delta = dayDelta(series.scheduledDate, updated.scheduledDate);
+  if (delta !== null) await shiftChildDates(ownerId, series.id, delta);
   return { updated, result: res };
 }
 
@@ -262,9 +272,10 @@ export async function completeMaterializedOccurrence(
 // these functions guard it too.
 
 // Write a series row's recurrence log + recomputed scheduled/status. Shared by the
-// toggle and carve paths. maintainDueOffset is intentionally NOT applied here — it
-// shifts the deadline by a completion *advance* delta (advanceSeriesRow), whereas a
-// calendar edit is a direct log change with no single "advance" to measure from.
+// toggle and carve paths. The deadline and the subtask tree ride the recomputed
+// scheduled date by its delta, exactly as they do on the completion path (ADR-253)
+// — under anchoring there IS a single delta to measure (old scheduled → the new
+// next-uncompleted date), which is what ADR-076's note here said was missing.
 async function writeSeriesLogState(
   ownerId: string,
   series: ItemRow,
@@ -281,22 +292,30 @@ async function writeSeriesLogState(
   const status = next
     ? defaultStatusKey(schema, "not_started") ?? "open"
     : defaultStatusKey(schema, "done") ?? "done";
+  const nextScheduled = next ? ymdToUtcDate(next) : null;
+  const logDelta = dayDelta(series.scheduledDate, nextScheduled);
+  const dueDate =
+    logDelta !== null &&
+    series.dueDate &&
+    !isDuePinned(series.properties as Record<string, unknown> | null)
+      ? shiftDay(series.dueDate, logDelta)
+      : series.dueDate;
   const [updated] = await getDb()
     .update(items)
     .set({
       properties: props,
-      scheduledDate: next ? ymdToUtcDate(next) : null,
+      scheduledDate: nextScheduled,
+      dueDate,
       status,
       statusCategory: next ? "not_started" : "done",
       updatedAt: new Date(),
     })
     .where(and(eq(items.id, series.id), eq(items.ownerId, ownerId)))
     .returning();
-  await recomputeRelativeChildren(
-    ownerId,
-    series.id,
-    updated.scheduledDate ? dateToYmdUtc(updated.scheduledDate) : null
-  );
+  // Same anchoring rule as the completion path (ADR-253): the log edit moved the
+  // series' scheduled date, so the checklist under it moves by the same delta.
+  const childDelta = dayDelta(series.scheduledDate, updated.scheduledDate);
+  if (childDelta !== null) await shiftChildDates(ownerId, series.id, childDelta);
   return updated as ItemRow;
 }
 

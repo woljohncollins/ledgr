@@ -10,13 +10,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
+import { useAnchoredPanel } from "@/components/ui/Popover";
 import SaveAsTemplateButton from "./SaveAsTemplateButton";
 import ApplyTemplateButton from "./ApplyTemplateButton";
 import ChangeTypeDialog from "./ChangeTypeDialog";
 import ActionGlyph from "./action-icons";
 import WordCount from "./WordCount";
 import MoveUnderMenu from "@/components/items/MoveUnderMenu";
+import { announceFloatingOpen, onOtherFloatingOpen } from "@/lib/floating";
 
 const rowClass =
   "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-neutral-300 hover:bg-neutral-800";
@@ -30,6 +33,9 @@ export default function ItemActionsMenu({
   createdLabel,
   updatedLabel,
   wordCount,
+  wordCountPerTab = false,
+  wordCountLive = true,
+  listen = false,
 }: {
   itemId: string;
   type: string;
@@ -42,6 +48,15 @@ export default function ItemActionsMenu({
   createdLabel?: string;
   updatedLabel?: string;
   wordCount?: number;
+  // The server count covers only the first canvas tab (tabbed body, ADR-095).
+  wordCountPerTab?: boolean;
+  // false = the count is a composed-document snapshot (widget-home records),
+  // not the live body — see WordCount's `live` prop.
+  wordCountLive?: boolean;
+  // Whether this item's type has Listen (read-aloud) turned on (Build → Types).
+  // The menu stays dumb: a click just dispatches a window event; ListenBar
+  // (mounted once per item in ItemCanvas) owns the Edge-redirect-or-play logic.
+  listen?: boolean;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -52,6 +67,34 @@ export default function ItemActionsMenu({
   // is the source of truth and a refresh re-syncs it.
   const [fav, setFav] = useState(favorited);
   const wrapRef = useRef<HTMLDivElement>(null);
+  // Both panels are PORTALED and viewport-clamped (Tyler, 2026-09-11): anchored
+  // `absolute right-0` they hung off the bottom of the window on short screens
+  // and the lower actions simply could not be reached — the same failure the
+  // color swatch panel had, and the same fix. `useAnchoredPanel` is the
+  // placement half of ui/Popover, exported for exactly this: it clamps both
+  // horizontal edges and flips above the trigger when below is cramped.
+  const { anchorRef: menuAnchorRef, coords: menuCoords } =
+    useAnchoredPanel<HTMLDivElement>(open, 224, "right");
+  const { anchorRef: moveAnchorRef, coords: moveCoords } =
+    useAnchoredPanel<HTMLDivElement>(moveOpen, 288, "right");
+  // A portaled panel is not inside wrapRef, so the outside-click test has to
+  // know about it or every click inside the menu would close the menu.
+  const menuRef = useRef<HTMLDivElement>(null);
+  const moveRef = useRef<HTMLDivElement>(null);
+
+  // Announce this menu when it opens, and stand down when another floating panel
+  // opens. The case that needed it: the "@" typeahead opens from a KEYSTROKE, so
+  // the outside-click listener below never fires and both stayed open, overlapping
+  // (Tyler's screenshot). Sub-popovers inside this menu don't announce, so "Save
+  // as template" still opens without closing its own parent.
+  useEffect(() => {
+    if (!open && !moveOpen) return;
+    announceFloatingOpen("item-actions");
+    return onOtherFloatingOpen("item-actions", () => {
+      setOpen(false);
+      setMoveOpen(false);
+    });
+  }, [open, moveOpen]);
 
   useEffect(() => {
     if (!open && !moveOpen) return;
@@ -59,7 +102,12 @@ export default function ItemActionsMenu({
       // Sub-popovers (Save as template, Make subtask of…) and the Apply modal
       // render inside this wrapper, so clicks in them keep it open; an outside
       // click closes both the menu and the move popover.
-      if (!wrapRef.current?.contains(e.target as Node)) {
+      const t = e.target as Node;
+      if (
+        !wrapRef.current?.contains(t) &&
+        !menuRef.current?.contains(t) &&
+        !moveRef.current?.contains(t)
+      ) {
         setOpen(false);
         setMoveOpen(false);
       }
@@ -154,7 +202,14 @@ export default function ItemActionsMenu({
   }
 
   return (
-    <div ref={wrapRef} className="relative inline-block">
+    <div
+      ref={(el) => {
+        wrapRef.current = el;
+        menuAnchorRef.current = el;
+        moveAnchorRef.current = el;
+      }}
+      className="relative inline-block"
+    >
       <button
         type="button"
         aria-haspopup="menu"
@@ -166,10 +221,19 @@ export default function ItemActionsMenu({
       >
         ⋯
       </button>
-      {open && (
+      {open && menuCoords && createPortal(
         <div
+          ref={menuRef}
           role="menu"
-          className="absolute right-0 z-50 mt-1 w-56 rounded-lg border border-neutral-700 bg-neutral-900 p-1 shadow-xl shadow-black/50"
+          style={{
+            position: "fixed",
+            left: menuCoords.left,
+            top: menuCoords.top,
+            bottom: menuCoords.bottom,
+            width: 224,
+            maxHeight: menuCoords.maxHeight,
+          }}
+          className="z-[60] overflow-y-auto overflow-x-hidden rounded-lg border border-neutral-700 bg-neutral-900 p-1 shadow-xl shadow-black/50"
         >
           {(createdLabel || updatedLabel || wordCount !== undefined) && (
             <>
@@ -178,7 +242,12 @@ export default function ItemActionsMenu({
                 {updatedLabel && <div>Updated {updatedLabel}</div>}
                 {wordCount !== undefined && (
                   <div>
-                    <WordCount itemId={itemId} initial={wordCount} />
+                    <WordCount
+                      itemId={itemId}
+                      initial={wordCount}
+                      initialPerTab={wordCountPerTab}
+                      live={wordCountLive}
+                    />
                   </div>
                 )}
               </div>
@@ -220,6 +289,29 @@ export default function ItemActionsMenu({
             <ActionGlyph icon="network" />
             Explore related
           </a>
+          {/* The canonical body as plain markdown, with a copy button (Tyler,
+              2026-08-12). Reachable on EVERY type, not just bespoke ones: the
+              need is sharpest on a song (the chord canvas shows a rendering, not
+              the text) but "let me see and take the whole thing" is universal.
+              Hard nav so it escapes the intercept modal, like Customize layout. */}
+          <a role="menuitem" href={`/items/${itemId}/markdown`} className={rowClass}>
+            <ActionGlyph icon="markdown" />
+            View full markdown
+          </a>
+          {listen && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent("ledgr:listen"));
+                setOpen(false);
+              }}
+              className={rowClass}
+            >
+              <ActionGlyph icon="speaker" />
+              Listen
+            </button>
+          )}
           <button
             type="button"
             role="menuitem"
@@ -258,19 +350,37 @@ export default function ItemActionsMenu({
             triggerClassName={rowClass}
             leading={<ActionGlyph icon="templateApply" />}
           />
-        </div>
+        </div>,
+        document.body
       )}
       {/* The reparent popover, anchored under the kebab. Rendered outside the
           {open} block so choosing "Make subtask of…" (which closes the menu)
-          keeps the picker mounted. */}
-      {moveOpen && (
-        <MoveUnderMenu
-          busy={busy}
-          onPick={(parentId) => void makeSubtaskOf(parentId)}
-          className="absolute right-0 top-full z-50 mt-1 w-72 max-w-[90vw] rounded-lg border border-neutral-700 bg-neutral-900 p-2 shadow-xl shadow-black/50"
-          placeholder="Search a task or project…"
-          topLevelLabel="Move to top level"
-        />
+          keeps the picker mounted. Portaled + clamped like the menu above. */}
+      {moveOpen && moveCoords && createPortal(
+        <div
+          ref={moveRef}
+          style={{
+            position: "fixed",
+            left: moveCoords.left,
+            top: moveCoords.top,
+            bottom: moveCoords.bottom,
+            width: 288,
+            maxHeight: moveCoords.maxHeight,
+          }}
+          className="z-[60] overflow-y-auto overflow-x-hidden rounded-lg border border-neutral-700 bg-neutral-900 p-2 shadow-xl shadow-black/50"
+        >
+          {/* Empty className, not omitted: MoveUnderMenu's DEFAULT_CLASS carries
+              its own absolute positioning and card chrome, which would fight the
+              portaled wrapper that now owns both. */}
+          <MoveUnderMenu
+            busy={busy}
+            onPick={(parentId) => void makeSubtaskOf(parentId)}
+            className=""
+            placeholder="Search a task or project…"
+            topLevelLabel="Move to top level"
+          />
+        </div>,
+        document.body
       )}
       {/* Rendered outside the {open} block so closing the menu doesn't unmount
           the dialog mid-move. */}

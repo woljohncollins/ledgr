@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 
 // S1 light-mode PROOF screen (ui-refresh, ADR-141). NOT a shipped theme — this
 // exists to prove the token mechanism: the SAME markup renders dark (default
-// tokens) on the left and light (the `.light` class flips --n-* + the semantic
+// tokens) on the left and light (the `data-theme` attribute flips --n-* + the semantic
 // layer) on the right, using only ordinary neutral utilities + the new semantic
 // classes. If both panels read correctly, a future light theme is a variable
 // flip, not a rewrite. Gated off in production so it never ships as a route.
@@ -12,12 +12,18 @@ export default function ThemeProofPage() {
     <main className="mx-auto max-w-5xl px-6 py-10">
       <h1 className="ui-title mb-1">Token proof · light-mode mechanism</h1>
       <p className="ui-meta mb-8">
-        Left = dark (default tokens). Right = <code>.light</code> (same markup, ramp flipped). Dev-only.
+        Left = dark (default tokens). Right panels = the three themes (<code>data-theme</code> light, gray, sepia; same markup, ramp flipped). Dev-only.
       </p>
-      <div className="grid gap-6 sm:grid-cols-2">
+      <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
         <Sample label="Dark (default)" />
-        <div className="light rounded-card">
-          <Sample label="Light (.light)" />
+        <div data-theme="light" className="rounded-card">
+          <Sample label="Light (light)" />
+        </div>
+        <div data-theme="gray" className="rounded-card">
+          <Sample label="Gray (gray)" />
+        </div>
+        <div data-theme="sepia" className="rounded-card">
+          <Sample label="Sepia (sepia)" />
         </div>
       </div>
     </main>

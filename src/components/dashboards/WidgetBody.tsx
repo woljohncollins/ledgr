@@ -318,6 +318,7 @@ export default function WidgetBody({
             items={data.items}
             groupOrder={data.groupOrder}
             propertyLabels={data.propertyLabels}
+            propertyKinds={data.propertyKinds}
             statuses={data.statuses}
             today={today}
             tz={tz}

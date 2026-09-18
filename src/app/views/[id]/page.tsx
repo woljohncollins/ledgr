@@ -17,8 +17,10 @@ import { resolveOwner } from "@/lib/owner";
 import { getAppTimezone } from "@/lib/today";
 import { appTodayYmd } from "@/lib/recurrence-service";
 import { getType } from "@/lib/types";
-import { resolveStatusSchema } from "@/lib/status";
+import { orderedStatuses, resolveStatusSchema } from "@/lib/status";
 import { getView, queryViewItems } from "@/lib/views";
+import { projectCardsForView } from "@/lib/project-cards";
+import { outgoingRelationsBySource } from "@/lib/relations";
 import { childRollups } from "@/lib/subtasks";
 import { listCalendarEventsForRange } from "@/lib/calendar/feed";
 import { overlayWindow } from "@/lib/calendar/overlay";
@@ -53,6 +55,9 @@ export default async function ViewPage({ params, searchParams }: Context) {
   const items = await queryViewItems(owner.id, view.filter, view.sort);
   const rollups = await childRollups(owner.id, items.map((i) => i.id));
   const tz = await getAppTimezone(owner.id);
+  // Rich project cards (2026-08-17): a project-scoped list/board view renders
+  // the configured card (view override → type default → the classic card).
+  const projectCards = await projectCardsForView(owner.id, view, items);
 
   // The read-only calendar overlay is only meaningful on a writable calendar
   // (one that places tasks on scheduled/due/plan — the interactive PlannerCalendar
@@ -88,7 +93,8 @@ export default async function ViewPage({ params, searchParams }: Context) {
     )?.options;
   } else if (!grouping || ("field" in grouping && grouping.field === "status")) {
     // A status board shows every status as a column, in the type's schema order.
-    groupOrder = statuses.map((s) => s.key);
+    // Category order, not the raw authored order (see view-render.ts).
+    groupOrder = orderedStatuses(statuses).map((s) => s.key);
   }
 
   // A board's cards can be dragged between columns only when a drop maps to a
@@ -110,7 +116,24 @@ export default async function ViewPage({ params, searchParams }: Context) {
   // key → label for the type's custom properties, so a property column reads
   // "Stage", not "stage".
   const propertyLabels: Record<string, string> = {};
-  for (const p of type?.propertySchema ?? []) propertyLabels[p.key] = p.label;
+  // key → kind alongside it, so a phone/email column renders dialable (ADR-192).
+  const propertyKinds: Record<string, string> = {};
+  for (const p of type?.propertySchema ?? []) {
+    propertyLabels[p.key] = p.label;
+    propertyKinds[p.key] = p.kind;
+  }
+
+  // Group-by-Tags: the column values are `relations` edges, not row data, so they
+  // need their own batched read. Fetched ONLY for a relation grouping — every other
+  // grouping reads the row it already has, and this would be a wasted query.
+  const groupEdges =
+    grouping && "relationRole" in grouping
+      ? await outgoingRelationsBySource(
+          owner.id,
+          items.map((i) => i.id),
+          grouping.relationRole
+        )
+      : undefined;
 
   return (
     <main className="min-h-screen">
@@ -153,8 +176,9 @@ export default async function ViewPage({ params, searchParams }: Context) {
 
         <SelectionProvider ids={items.map((item) => item.id)}>
           {/* Board/calendar render no row checkboxes (ADR-118), so they get no
-              select toggle either — list/table/agenda do. */}
-          {view.layout !== "board" && view.layout !== "calendar" && (
+              select toggle either — list/table/agenda do. The project-card grid
+              is a gallery layout, same exception. */}
+          {view.layout !== "board" && view.layout !== "calendar" && !projectCards && (
             <SelectModeToggle />
           )}
           <DeskHostProvider
@@ -163,8 +187,10 @@ export default async function ViewPage({ params, searchParams }: Context) {
             <ViewRenderer
               view={view}
               items={items}
+              groupEdges={groupEdges}
               groupOrder={groupOrder}
               propertyLabels={propertyLabels}
+              propertyKinds={propertyKinds}
               boardDraggable={boardDraggable}
               statuses={statuses}
               month={month}
@@ -174,6 +200,7 @@ export default async function ViewPage({ params, searchParams }: Context) {
               rollups={rollups}
               today={appTodayYmd(new Date(), tz)}
               tz={tz}
+              projectCards={projectCards ?? undefined}
             />
           </DeskHostProvider>
           <BulkActionBar {...(type ? bulkConfigForType(type) : {})} />

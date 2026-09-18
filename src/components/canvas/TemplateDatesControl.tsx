@@ -16,7 +16,7 @@ function modeOf(rule?: DateRule): Mode {
 }
 
 const selectClass =
-  "rounded border border-neutral-800 bg-neutral-950 px-1.5 py-1 text-xs text-neutral-200 outline-none focus:border-neutral-600 [color-scheme:dark]";
+  "rounded border border-neutral-800 bg-neutral-950 px-1.5 py-1 text-xs text-neutral-200 outline-none focus:border-neutral-600";
 
 function FieldRow({
   label,

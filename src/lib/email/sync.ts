@@ -94,7 +94,7 @@ export async function runEmailImport(
         type,
         title,
         body: makeMarkdownBody(body),
-        inbox: true,
+        source: "email_in",
         properties: {
           email: {
             messageId: msg.id,

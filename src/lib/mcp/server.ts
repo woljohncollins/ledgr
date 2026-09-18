@@ -20,6 +20,7 @@ import {
   MEMORY_PROTOCOL_URI,
   readGuideResource,
 } from "@/lib/mcp/guide";
+import { USER_GUIDE_RESOURCE } from "@/lib/mcp/user-guide";
 import { getSettings } from "@/lib/settings";
 
 // Free-form version string for clients to display; tracks the PRD epoch
@@ -46,6 +47,16 @@ export const INSTRUCTIONS = [
   "learn the available types and their custom properties before creating or",
   "filtering. A typical flow for \"what's open with Roger\": search_items for the",
   "Roger person, then list_items with that relatedTo, type=task, status=open.",
+  "Tasks nest and tasks repeat. To break a task down, call add_subtasks with a",
+  "list of titles (or create_item with parentId); read the tree back with",
+  "list_subtasks, which carries an \"n of m done\" rollup. To make a task repeat,",
+  "call set_recurrence with a phrase like \"every other tuesday\" or \"monthly on",
+  "the 3rd\". A repeating task is ONE item holding the rule plus a log of which",
+  "dates are done, so nothing stacks up when it's missed: completing it with",
+  "update_item advances it to its next date rather than closing it. Use",
+  "update_occurrence to tick a specific date, or to carve one date out into its",
+  "own item when that one is different.",
+  "",
   "Use attach_file to add an image or file to an item — pass a sourceUrl to fetch",
   "or base64 bytes, and by default it embeds the image/link in the item's body.",
   "For a LOCAL or LARGE file, use create_upload_url (get a presigned PUT), PUT the",
@@ -81,12 +92,14 @@ export const INSTRUCTIONS = [
 const MEMORY_INSTRUCTIONS = [
   "",
   "AI MEMORY is on. The owner keeps durable memories about themselves, their",
-  "people, and their work in Ledgr. Call get_memory_stumps at the START of the",
-  "session to load the compact index of what's stored, then get_item a stump (and",
-  "follow its links) when it's relevant. When you learn something durable worth",
-  "carrying into a later session, file it with remember. Read the",
-  "memory-protocol resource (ledgr://guide/memory-protocol) for how to recall and",
-  "when to remember.",
+  "people, and their work in Ledgr, in two tiers. Call get_memory_stumps at the",
+  "START of the session: it returns the small PINNED set, the standing rules you",
+  "need on every run. Everything else is retrieved on demand — when a person,",
+  "project, or system comes up that you don't already know, search_items for it",
+  "by name with type: \"memory\", then get_item the stump for detail. When you",
+  "learn something durable worth carrying into a later session, file it with",
+  "remember. Read the memory-protocol resource (ledgr://guide/memory-protocol)",
+  "for the full contract.",
 ].join("\n");
 
 // Appended to INSTRUCTIONS only when the owner has Live editing context on
@@ -153,12 +166,14 @@ export async function handleMcpMessage(
       return rpcResult(id, { tools: await listToolDefs(ownerId) });
 
     case "resources/list": {
-      // The stable workspace-shaping guide, plus the AI Memory protocol when the
-      // owner has AI Memory on (ADR-137) — so a vanilla client never sees it.
+      // The stable workspace-shaping and user guides, plus the AI Memory
+      // protocol when the owner has AI Memory on (ADR-137) — so a vanilla client
+      // never sees it. The user guide (ADR-189) is ungated: "what can Ledgr do"
+      // is useful to every client, and it holds no owner data.
       const { aiMemoryEnabled } = await getSettings(ownerId);
       const resources = aiMemoryEnabled
-        ? [GUIDE_RESOURCE, MEMORY_PROTOCOL_RESOURCE]
-        : [GUIDE_RESOURCE];
+        ? [GUIDE_RESOURCE, USER_GUIDE_RESOURCE, MEMORY_PROTOCOL_RESOURCE]
+        : [GUIDE_RESOURCE, USER_GUIDE_RESOURCE];
       return rpcResult(id, { resources });
     }
 

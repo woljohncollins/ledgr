@@ -1,5 +1,5 @@
 // AI Memory verification (ADR-137): the memory type + get_memory_stumps/remember
-// tools + the aiMemoryEnabled gating + horizon aging, end-to-end against live Neon
+// tools + the aiMemoryEnabled gating + pinned-only always-on (ADR-230), end-to-end against live Neon
 // through the real MCP dispatcher. Uses a throwaway owner (created + fully cleaned
 // up), so it never touches real data. Run:
 //   npx tsx scripts/verify-memory.mts
@@ -18,7 +18,6 @@ const { eq, inArray } = await import("drizzle-orm");
 const { handleMcpMessage } = await import("../src/lib/mcp/server");
 const { createItem } = await import("../src/lib/item-mutations");
 const { updateSettings } = await import("../src/lib/settings");
-const { getMemoryStumps } = await import("../src/lib/memory");
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -39,6 +38,11 @@ function callPayload(r: unknown): { data: Record<string, unknown>; isError: bool
     data = { raw: text };
   }
   return { data, isError: res.isError === true };
+}
+// A handler may render its own text (the compact stump index, ADR-230).
+function callText(r: unknown): string {
+  const res = resultOf(r) as { content?: { text: string }[] };
+  return res.content?.[0]?.text ?? "";
 }
 const rpc = (method: string, params: Record<string, unknown>, owner: string) =>
   handleMcpMessage({ jsonrpc: "2.0", id: Math.floor(Math.random() * 1e6), method, params }, owner);
@@ -70,7 +74,7 @@ try {
   const protoRead = resultOf(await rpc("resources/read", { uri: "ledgr://guide/memory-protocol" }, ownerId)) as {
     contents?: { text: string }[];
   };
-  check("on: memory-protocol reads", (protoRead.contents?.[0]?.text ?? "").includes("rising bar"));
+  check("on: memory-protocol reads", (protoRead.contents?.[0]?.text ?? "").includes("pinned"));
 
   // --- remember (one-call create + link) ------------------------------------
   const rememberRes = callPayload(
@@ -96,37 +100,63 @@ try {
   check("remember: facets echoed", rememberRes.data.kind === "feedback" && rememberRes.data.horizon === "evergreen");
   check("remember: linked the person", Array.isArray(rememberRes.data.about) && (rememberRes.data.about as string[]).includes(person.id));
 
-  // --- get_memory_stumps (via the tool) -------------------------------------
-  const stumpsRes = callPayload(await rpc("tools/call", { name: "get_memory_stumps", arguments: {} }, ownerId));
-  const stumps = (stumpsRes.data.stumps ?? []) as {
-    id: string;
-    title: string;
-    kind: string | null;
-    horizon: string | null;
-    linked: { id: string }[];
-  }[];
-  const mine = stumps.find((s) => s.id === memId);
-  check("stumps: the memory is in the always-on set", !!mine);
-  check("stumps: carries kind/horizon", mine?.kind === "feedback" && mine?.horizon === "evergreen");
-  check("stumps: carries the linked person (the recall graph)", !!mine?.linked.some((l) => l.id === person.id));
+  // --- get_memory_stumps: compact TEXT, pinned only (ADR-230) ---------------
+  // The unpinned evergreen memory above must NOT load; horizon is a truth
+  // property and no longer touches the always-on decision.
+  const rawText = callText(await rpc("tools/call", { name: "get_memory_stumps", arguments: {} }, ownerId));
+  check("stumps: payload is compact text, not JSON", !rawText.trimStart().startsWith("{"));
+  check("stumps: header reports the counts", /shown of \d+ total/.test(rawText));
+  check("stumps: unpinned evergreen memory is NOT always-on", !rawText.includes(memId));
 
-  // --- horizon aging: an old episodic drops from always-on, includeAll keeps it
-  const episodic = await createItem(ownerId, {
+  const pinnedMem = await createItem(ownerId, {
     type: "memory",
-    title: "Old episodic note",
-    properties: { horizon: "episodic" },
+    title: "Always hand the owner PowerShell, never bash",
+    properties: { kind: "feedback", horizon: "evergreen", pinned: true },
   });
-  createdItemIds.push(episodic.id);
-  // Backdate its touch 90 days so it's outside the always-on window.
+  createdItemIds.push(pinnedMem.id);
+  const pinnedText = callText(await rpc("tools/call", { name: "get_memory_stumps", arguments: {} }, ownerId));
+  check("stumps: a pinned memory IS always-on", pinnedText.includes(pinnedMem.id));
+  check("stumps: line carries kind/horizon and an age", /\[feed\/ever\] \(\d{4}-\d{2}-\d{2}, today\)/.test(pinnedText));
+
+  // --- a pinned memory loads however old it is ------------------------------
   await getDb()
     .update(items)
-    .set({ updatedAt: new Date(Date.now() - 90 * 86_400_000) })
-    .where(eq(items.id, episodic.id));
-  const alwaysOn = await getMemoryStumps(ownerId);
-  const all = await getMemoryStumps(ownerId, { includeAll: true });
-  check("aging: old episodic is NOT in the always-on set", !alwaysOn.some((s) => s.id === episodic.id));
-  check("aging: old episodic IS in includeAll", all.some((s) => s.id === episodic.id));
-  check("aging: evergreen stays always-on", alwaysOn.some((s) => s.id === memId));
+    .set({ updatedAt: new Date(Date.now() - 400 * 86_400_000) })
+    .where(eq(items.id, pinnedMem.id));
+  const agedText = callText(await rpc("tools/call", { name: "get_memory_stumps", arguments: {} }, ownerId));
+  check("stumps: an old pinned memory still loads", agedText.includes(pinnedMem.id));
+  check("stumps: its age renders in years", agedText.includes("1y ago"));
+
+  // --- stale hedge: an aged seasonal memory is marked, never hidden ---------
+  const seasonal = await createItem(ownerId, {
+    type: "memory",
+    title: "Searching for a campus pastor",
+    properties: { kind: "project", horizon: "seasonal" },
+  });
+  createdItemIds.push(seasonal.id);
+  await getDb()
+    .update(items)
+    .set({ updatedAt: new Date(Date.now() - 120 * 86_400_000) })
+    .where(eq(items.id, seasonal.id));
+  const allText = callText(
+    await rpc("tools/call", { name: "get_memory_stumps", arguments: { includeAll: true } }, ownerId)
+  );
+  check("includeAll: the unpinned memories are all there", allText.includes(memId) && allText.includes(seasonal.id));
+  check("stale: aged seasonal renders STALE", /\(20\d\d-\d\d-\d\d, 4mo ago, STALE\).*Searching for a campus pastor/.test(allText));
+  check("stale: aged evergreen does NOT render STALE", !new RegExp(`${pinnedMem.id}.*STALE`).test(agedText));
+
+  // --- search_items(type: "memory") is the Tier 2 recall path ---------------
+  const hitRes = callPayload(
+    await rpc(
+      "tools/call",
+      { name: "search_items", arguments: { query: "PowerShell", type: "memory" } },
+      ownerId
+    )
+  );
+  const hits = (hitRes.data.items ?? []) as { id: string; age?: string }[];
+  const hit = hits.find((h) => h.id === pinnedMem.id);
+  check("search: type=memory finds the memory", !!hit);
+  check("search: the hit renders its age", hit?.age === "1y ago");
 
   // --- turn OFF again: tools + resource disappear, callTool rejects ---------
   await updateSettings(ownerId, { aiMemoryEnabled: false });

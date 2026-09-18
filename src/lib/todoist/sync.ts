@@ -5,10 +5,13 @@
 // reconcile (Ledgr / Todoist / last-synced) lets Ledgr win when both changed
 // but still accepts a Todoist-only date change. Recurrence is Todoist's
 // entirely. Inbox pull-in imports tasks created natively in Todoist's inbox
-// (the offline-capture path) as inbox items.
+// (the offline-capture path); where those land is the owner's Capture routing
+// for the "todoist" source, the Inbox unless they changed it (ADR-249).
 import { and, eq, isNotNull, isNull, or } from "drizzle-orm";
 import { getDb } from "@/db";
 import { items, jobState } from "@/db/schema";
+import { resolveRoute } from "@/lib/item-mutations";
+import { relateItems } from "@/lib/relations";
 import {
   dueFromTodoist,
   dueToTodoist,
@@ -226,20 +229,34 @@ export async function runTodoistSync(
 
   // --- inbox pull-in: native Todoist inbox tasks become Ledgr inbox tasks --
   if (inboxProjectId) {
+    // Where this arrival path files things, per the owner's Capture routing
+    // (ADR-249). Resolved ONCE for the whole batch rather than per task: it is
+    // the same answer every time and a pull can import a lot of tasks. This
+    // path inserts directly (it carries todoistId, which createItem has no
+    // field for), so it reuses createItem's router and writes the destination
+    // edge the same best-effort way createItem does.
+    const route = await resolveRoute(ownerId, { source: "todoist" });
     for (const t of active) {
       if (t.projectId !== inboxProjectId || linkedIds.has(t.id)) continue;
       try {
-        await db.insert(items).values({
-          ownerId,
-          type: "task",
-          title: t.content,
-          status: "open",
-          dueDate: dueFromTodoist(t.dueDate),
-          // Offline-capture arrival: untriaged (ADR-010).
-          inbox: true,
-          todoistId: t.id,
-          properties: { todoist: { id: t.id, syncedDue: t.dueDate } },
-        });
+        const [made] = await db
+          .insert(items)
+          .values({
+            ownerId,
+            type: "task",
+            title: t.content,
+            status: "open",
+            dueDate: dueFromTodoist(t.dueDate),
+            inbox: route.inbox,
+            todoistId: t.id,
+            properties: { todoist: { id: t.id, syncedDue: t.dueDate } },
+          })
+          .returning({ id: items.id });
+        if (route.destinationId) {
+          await relateItems(ownerId, made.id, route.destinationId, "project").catch(
+            () => {}
+          );
+        }
         result.imported++;
       } catch (err) {
         result.errors++;

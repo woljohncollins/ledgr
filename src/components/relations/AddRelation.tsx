@@ -1,10 +1,11 @@
 // "+ Relate" (slice 15): inline typeahead over the owner's items (the same
 // title-substring q= the @-mention picker uses), Notion-default add-in-place.
 // Enter or click relates the highlighted hit and keeps the input open for
-// rapid entry; Escape or an empty blur closes it. Create-on-miss (ADR-067):
-// when the typed name matches nothing, a "Create" row makes an `unmarked` item
-// (inbox=true, triaged later by retyping) and relates it — so you can link to
-// something that doesn't exist yet without leaving the item.
+// rapid entry; Escape or an empty blur closes it. Create-on-miss: when the typed
+// name matches nothing, the picker offers one TYPED create row per type it could
+// be (src/lib/mention-create.ts, shared with the three "@" pickers) and relates
+// whichever is picked — so you can link to something that doesn't exist yet
+// without leaving the item, and without minting an untyped stub.
 "use client";
 
 import { useRouter } from "next/navigation";
@@ -14,10 +15,27 @@ import {
   parseTypeToken,
   type TypeMeta,
 } from "@/components/search/type-token";
+import {
+  createMentionTarget,
+  createTargets,
+  needsTriage,
+  type CreateTarget,
+} from "@/lib/mention-create";
+import { announceFloatingOpen } from "@/lib/floating";
 
 type Hit = { id: string; type: string; title: string };
 
-export default function AddRelation({ itemId }: { itemId: string }) {
+export default function AddRelation({
+  itemId,
+  rail = false,
+}: {
+  itemId: string;
+  // Rail mode (ADR-253): render the compact "+" used by the rail's other
+  // relation rows (Project / Tags / People) instead of the "+ Relate" pill, so
+  // the task rail's Linked row matches its siblings. The picker itself is
+  // identical either way.
+  rail?: boolean;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -31,17 +49,27 @@ export default function AddRelation({ itemId }: { itemId: string }) {
     if (open && types.length === 0) void loadTypes().then(setTypes);
   }, [open, types.length]);
 
+  // Close any other open floating panel when this box opens (src/lib/floating.ts).
+  useEffect(() => {
+    if (open) announceFloatingOpen("add-relation");
+  }, [open]);
+
   // A leading "/type" token ("/person jane") narrows to one type; the rest is
   // the title query, and "/person" alone browses recent people.
   const parsed = useMemo(() => parseTypeToken(q, types), [q, types]);
   const effective = (parsed ? parsed.rest : q).trim();
   const typeKey = parsed?.type.key ?? "";
 
-  // Offer create-on-miss whenever the name doesn't exactly match a hit.
+  // Offer create-on-miss whenever the name doesn't exactly match a hit: one row
+  // per type it could become, or the single scoped type when "/person" is active.
   const showCreate =
     effective !== "" &&
     !hits.some((h) => h.title.trim().toLowerCase() === effective.toLowerCase());
-  const rowCount = hits.length + (showCreate ? 1 : 0);
+  const targets = useMemo(
+    () => (showCreate ? createTargets(types, parsed?.type ?? null) : []),
+    [showCreate, types, parsed]
+  );
+  const rowCount = hits.length + targets.length;
 
   // Empty queries clear hits in the onChange handler, not here, so the
   // effect only ever talks to the network (react-hooks/set-state-in-effect).
@@ -91,25 +119,16 @@ export default function AddRelation({ itemId }: { itemId: string }) {
     }
   }
 
-  // Create-on-miss: the token's type when one is active ("/person Jane" creates
-  // a person), else `unmarked` for later triage (ADR-067). Then relate it like
-  // any other.
-  async function createAndRelate() {
+  // Create-on-miss as the picked type, then relate it like any other hit. Only
+  // the "Unsorted" catch-all still lands in the Inbox (needsTriage) — a named
+  // type with a title and a fresh edge has nothing left to triage.
+  async function createAndRelate(target: CreateTarget) {
     if (state === "busy" || !effective) return;
     setState("busy");
     try {
-      const res = await fetch(`/api/items`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          type: typeKey || "unmarked",
-          title: effective,
-          inbox: true,
-        }),
-      });
-      if (!res.ok) throw new Error(String(res.status));
-      const { item } = (await res.json()) as { item: { id: string } };
-      await relateTo(item.id);
+      const made = await createMentionTarget(effective, target);
+      if (!made) throw new Error("create failed");
+      await relateTo(made.id);
       setQ("");
       setHits([]);
       setState("idle");
@@ -120,6 +139,20 @@ export default function AddRelation({ itemId }: { itemId: string }) {
   }
 
   if (!open) {
+    if (rail) {
+      return (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          aria-label="Link an item"
+          className="flex h-5 w-5 items-center justify-center rounded text-ink-subtle hover:bg-surface-2 hover:text-ink"
+        >
+          <svg aria-hidden viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+        </button>
+      );
+    }
     return (
       <button
         onClick={() => setOpen(true)}
@@ -148,7 +181,10 @@ export default function AddRelation({ itemId }: { itemId: string }) {
             setActive((a) => Math.max(a - 1, 0));
           } else if (e.key === "Enter") {
             if (active < hits.length && hits[active]) void relate(hits[active]);
-            else if (showCreate) void createAndRelate();
+            else {
+              const target = targets[active - hits.length];
+              if (target) void createAndRelate(target);
+            }
           } else if (e.key === "Escape") {
             setQ("");
             setHits([]);
@@ -195,28 +231,31 @@ export default function AddRelation({ itemId }: { itemId: string }) {
               </button>
             </li>
           ))}
-          {showCreate && (
-            <li>
+          {/* Create-on-miss: one row per type the name could become. The right
+              edge names the type, and says "to Inbox" only for the catch-all —
+              the one target that still needs triage. */}
+          {targets.map((target, n) => (
+            <li key={target.key}>
               <button
                 onMouseDown={(e) => {
                   e.preventDefault();
-                  void createAndRelate();
+                  void createAndRelate(target);
                 }}
-                onMouseEnter={() => setActive(hits.length)}
+                onMouseEnter={() => setActive(hits.length + n)}
                 className={`flex w-full items-center gap-1 px-2 py-1 text-left text-sm ${
-                  active === hits.length ? "bg-neutral-800" : ""
+                  active === hits.length + n ? "bg-neutral-800" : ""
                 }`}
               >
-                <span className="text-neutral-400">
-                  {parsed ? `Create ${parsed.type.label}` : "Create"}
-                </span>
+                <span className="text-neutral-400">Create</span>
                 <span className="min-w-0 flex-1 truncate text-neutral-100">
                   “{effective}”
                 </span>
-                <span className="shrink-0 text-xs text-neutral-500">to Inbox</span>
+                <span className="shrink-0 text-xs text-neutral-500">
+                  {needsTriage(target) ? `${target.label} · to Inbox` : target.label}
+                </span>
               </button>
             </li>
-          )}
+          ))}
         </ul>
       )}
     </div>

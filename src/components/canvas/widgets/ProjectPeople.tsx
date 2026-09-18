@@ -9,15 +9,10 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import PersonAvatar from "@/components/people/PersonAvatar";
 
-type Person = { id: string; title: string };
+type Person = { id: string; title: string; image: string | null };
 type Hit = { id: string; type: string; title: string };
-
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "?";
-  return (parts[0][0] + (parts[1]?.[0] ?? "")).toUpperCase();
-}
 
 export default function ProjectPeople({
   recordId,
@@ -134,9 +129,9 @@ export default function ProjectPeople({
             title={p.title || "Untitled"}
             className="inline-flex items-center gap-1.5 hover:text-neutral-100"
           >
-            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-neutral-700 text-[10px] font-medium text-neutral-200">
-              {initials(p.title)}
-            </span>
+            {/* The face when the person's Image is set (ADR-202 addendum 4),
+                initials otherwise — same avatar the project cards wear. */}
+            <PersonAvatar src={p.image} name={p.title} size={20} fallback="initials" />
             <span className="max-w-[10rem] truncate">{p.title || "Untitled"}</span>
           </Link>
           <button

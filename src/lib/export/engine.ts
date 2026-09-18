@@ -26,6 +26,19 @@ import type { ExportTarget } from "./target";
 // if daily throughput ever falls behind the edit rate.
 const DEFAULT_BATCH = 30;
 
+// Wall-clock guard (2026-08-14). The item cap alone can't bound a run: an
+// attachment-heavy stretch of the queue makes each item far more expensive
+// than a plain .md PUT, so 30 items overran the 60s lambda and EVERY caller
+// 504'd (nightly cron, the export-drain loop, and Save Offline). A killed run
+// never writes job_state, so `remaining` froze and the drain loop bailed on
+// its 8-consecutive-failure guard even though per-item progress was real.
+// Stopping at the budget turns that timeout into a clean 200 with an honest
+// `remaining`, which every caller already knows how to resume from.
+// ponytail: the check is between items, so one pathological item (a huge
+// attachment) can still overrun on its own; that's the export-drain
+// workflow's "8 in a row" case. Add a per-item timeout if it ever shows up.
+const RUN_BUDGET_MS = 45_000;
+
 export const EXPORT_JOB_KEY = "onedrive_export";
 
 export type ExportRunResult = {
@@ -138,6 +151,41 @@ async function listPersonTitles(
 // once uploaded: one copy is done forever.
 type AttachmentFailure = { storageKey: string; status: number };
 
+// Rewrites the stable /files/<id> addresses in an exported body to the RELATIVE
+// path of the attachment copy sitting beside it in the export tree (ADR-228).
+//
+// This is what keeps the export Sunday-proof (principle 4). A body stores
+// /files/<id>, which resolves against the app — meaningless in a markdown file
+// on OneDrive. Rewriting to `../../_attachments/…` makes the exported tree
+// fully self-contained, so images render offline in Obsidian or any reader with
+// the app down and no internet. That is strictly better than the provider URLs
+// this replaced, which always needed the network.
+//
+// `desired` is the item's path under the export root; each `/` in it is one
+// level to climb back out of.
+// Exported for scripts/verify-attachment-urls.mts (pure glue stays node-testable,
+// the discipline image-markdown.ts follows).
+export function rewriteAttachmentPaths(
+  body: string,
+  desired: string,
+  attachmentPaths: string[]
+): string {
+  if (attachmentPaths.length === 0) return body;
+  const up = "../".repeat((desired.match(/\//g) ?? []).length);
+  let out = body;
+  for (const path of attachmentPaths) {
+    // exportAttachments builds `_attachments/{itemId}/{id8}-{filename}`, so the
+    // 8-char id prefix is what ties a path back to its /files/<id> address.
+    const id8 = path.split("/").pop()?.slice(0, 8);
+    if (!id8) continue;
+    out = out.replaceAll(
+      new RegExp(`/files/${id8}[0-9a-f-]{28}`, "gi"),
+      `${up}${path}`
+    );
+  }
+  return out;
+}
+
 async function exportAttachments(
   item: ItemRow,
   target: ExportTarget
@@ -171,7 +219,7 @@ async function exportAttachments(
       // configured run copies it later. Don't list a file we didn't write.
       continue;
     }
-    const res = await fetch(storage.publicUrl(att.storageKey));
+    const res = await fetch(await storage.presignDownload(att.storageKey));
     if (!res.ok) {
       // A missing/unreadable object (e.g. bytes that never finished uploading)
       // must NOT block the item's body from exporting: the markdown is the
@@ -182,7 +230,20 @@ async function exportAttachments(
       failed.push({ storageKey: att.storageKey, status: res.status });
       continue;
     }
-    await target.putFile(path, new Uint8Array(await res.arrayBuffer()));
+    // The write is guarded for the same reason as the read above: a Graph
+    // failure here (409s show up on attachment paths) used to escape this
+    // function and land in the item's catch, failing the WHOLE item, so the
+    // markdown never reached OneDrive over one image. That is exactly what the
+    // comment above forbids, and the item then failed every run forever since
+    // nothing about it changed. Record it and move on.
+    // status 0 = the upload leg failed, as opposed to a real HTTP status from
+    // the R2 read above.
+    try {
+      await target.putFile(path, new Uint8Array(await res.arrayBuffer()));
+    } catch {
+      failed.push({ storageKey: att.storageKey, status: 0 });
+      continue;
+    }
     await db
       .update(attachments)
       .set({ exportedAt: new Date() })
@@ -218,6 +279,9 @@ export async function runExport(
   target: ExportTarget,
   opts: {
     batch?: number;
+    // Overridable so the verify script can trip the guard without burning the
+    // real budget; callers in the app leave it at the default.
+    budgetMs?: number;
     onError?: (itemId: string, err: unknown) => void;
     onAttachmentError?: (itemId: string, failures: AttachmentFailure[]) => void;
   } = {}
@@ -242,7 +306,11 @@ export async function runExport(
     remaining: 0,
   };
 
+  const deadline = Date.now() + (opts.budgetMs ?? RUN_BUDGET_MS);
   for (const item of candidates) {
+    // Stop cleanly rather than being killed mid-PUT: the items not reached
+    // are still unexported, so the recount below rolls them into `remaining`.
+    if (Date.now() > deadline) break;
     try {
       const inArchive = item.deletedAt !== null || item.statusCategory === "archived";
       const year = yearInZone(item.createdAt, tz);
@@ -275,7 +343,7 @@ export async function runExport(
       // nested at 2 spaces would otherwise flatten. spaceEmptyListItems: an empty
       // bullet flush under a paragraph is a setext heading to those same readers
       // (see list-markdown.ts). (Both passes markdown-render applies; see there.)
-      const content = `${buildFrontmatter(exportItem, people, atts.paths)}\n\n${normalizeListIndent(spaceEmptyListItems(bodyMarkdown(exportItem.body)))}\n`;
+      const content = `${buildFrontmatter(exportItem, people, atts.paths)}\n\n${rewriteAttachmentPaths(normalizeListIndent(spaceEmptyListItems(bodyMarkdown(exportItem.body))), desired, atts.paths)}\n`;
       await target.putFile(desired, content);
       // A rename, retype, or live<->archive move leaves a stale file at the
       // old path; the put above already wrote the replacement.

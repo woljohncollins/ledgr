@@ -158,7 +158,7 @@ export default function RelatedRow({
             type="date"
             value={dueDate ? dueDate.slice(0, 10) : ""}
             onChange={(e) => changeDue(e.target.value)}
-            className="shrink-0 rounded border border-transparent bg-transparent text-xs text-neutral-500 [color-scheme:dark] hover:border-neutral-700 focus:border-neutral-600 focus:text-neutral-300 focus:outline-none"
+            className="shrink-0 rounded border border-transparent bg-transparent text-xs text-neutral-500 hover:border-neutral-700 focus:border-neutral-600 focus:text-neutral-300 focus:outline-none"
             aria-label="Due date"
           />
         ) : (

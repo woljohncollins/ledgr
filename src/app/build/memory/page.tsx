@@ -7,7 +7,7 @@
 //
 // Gated by settings.aiMemoryEnabled: off → an enable prompt (the sidebar entry
 // is hidden too, so you only land here from Settings or a direct link); on →
-// the stumps, marked always-on vs. pull-only.
+// the stumps, marked always-on (pinned) vs. pull-only.
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import NewItemButton from "@/components/home/NewItemButton";
@@ -34,15 +34,19 @@ function Badge({ children, tone = "neutral" }: { children: React.ReactNode; tone
   );
 }
 
-function StumpRow({ stump, alwaysOn }: { stump: MemoryStump; alwaysOn: boolean }) {
+function StumpRow({ stump }: { stump: MemoryStump }) {
   return (
     <li className="rounded-xl border border-neutral-800 p-3.5">
       <div className="flex flex-wrap items-center gap-2">
         <Link href={`/items/${stump.id}`} className="min-w-0 flex-1 truncate text-sm text-neutral-200 hover:text-white">
           {stump.title || "Untitled memory"}
         </Link>
-        {alwaysOn ? <Badge tone="green">always-on</Badge> : <Badge>on demand</Badge>}
-        {stump.pinned && <Badge tone="accent">pinned</Badge>}
+        {stump.pinned ? <Badge tone="green">always-on</Badge> : <Badge>on demand</Badge>}
+        {stump.supersededBy && (
+          <Link href={`/items/${stump.supersededBy.id}`} title={`Replaced on ${stump.supersededBy.date}; opens the newer memory`}>
+            <Badge tone="accent">superseded</Badge>
+          </Link>
+        )}
         {stump.kind && <Badge>{stump.kind}</Badge>}
         {stump.horizon && <Badge>{stump.horizon}</Badge>}
         <span className="shrink-0 text-xs text-neutral-600">{dateFmt.format(new Date(stump.updatedAt))}</span>
@@ -84,7 +88,8 @@ export default async function AiMemoryPage() {
           Durable memories an AI assistant keeps in Ledgr and reads over MCP — so it acts like it
           knows you across sessions. This is a maintenance surface for the AI, not part of your Work.
           Each memory is a short “stump” linked to the people, projects, and notes it’s about; the
-          assistant loads the stumps at the start of a session and follows the links when they matter.
+          assistant loads the pinned ones at the start of a session and searches out the rest when a
+          task names someone or something they cover.
         </p>
 
         {!aiMemoryEnabled ? (
@@ -117,11 +122,8 @@ export default async function AiMemoryPage() {
 }
 
 async function EnabledBody({ ownerId }: { ownerId: string }) {
-  const [all, alwaysOn] = await Promise.all([
-    getMemoryStumps(ownerId, { includeAll: true }),
-    getMemoryStumps(ownerId),
-  ]);
-  const alwaysOnIds = new Set(alwaysOn.map((s) => s.id));
+  const { stumps: all } = await getMemoryStumps(ownerId, { includeAll: true });
+  const pinnedCount = all.filter((s) => s.pinned).length;
 
   return (
     <>
@@ -147,7 +149,7 @@ async function EnabledBody({ ownerId }: { ownerId: string }) {
             Stumps ({all.length})
           </h2>
           <span className="text-xs text-neutral-600">
-            {alwaysOnIds.size} always-on · {all.length - alwaysOnIds.size} pull-only
+            {pinnedCount} always-on · {all.length - pinnedCount} pull-only
           </span>
         </div>
         {all.length === 0 ? (
@@ -156,13 +158,13 @@ async function EnabledBody({ ownerId }: { ownerId: string }) {
             <code className="rounded bg-neutral-800 px-1 py-0.5 font-mono text-[11px] text-neutral-400">
               remember
             </code>{" "}
-            tool, or you can add one yourself with “+ New”. Evergreen and pinned memories always load;
-            seasonal and episodic ones age out of the always-on set but stay searchable.
+            tool, or you can add one yourself with “+ New”. Only pinned memories load every session;
+            everything else stays searchable and gets pulled in when it’s relevant.
           </p>
         ) : (
           <ul className="mt-3 flex flex-col gap-2">
             {all.map((stump) => (
-              <StumpRow key={stump.id} stump={stump} alwaysOn={alwaysOnIds.has(stump.id)} />
+              <StumpRow key={stump.id} stump={stump} />
             ))}
           </ul>
         )}

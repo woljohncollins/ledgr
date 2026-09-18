@@ -147,8 +147,8 @@ const att = await import("../src/lib/attachments");
 // This check asserts the unconfigured-storage path, regardless of whether
 // the local .env.local (loaded above) already carries real R2 credentials
 // for everyday dev use — so clear them for just this one assertion. (The
-// fake config set right below overwrites all five for the rest of the suite.)
-for (const k of ["R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET", "R2_ENDPOINT", "R2_PUBLIC_BASE_URL"]) {
+// fake config set right below overwrites all four for the rest of the suite.)
+for (const k of ["R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET", "R2_ENDPOINT"]) {
   delete process.env[k];
 }
 
@@ -166,7 +166,6 @@ process.env.R2_ACCESS_KEY_ID = "verifykey";
 process.env.R2_SECRET_ACCESS_KEY = "verifysecret";
 process.env.R2_BUCKET = "ledgr";
 process.env.R2_ENDPOINT = "https://fake-account.r2.cloudflarestorage.com";
-process.env.R2_PUBLIC_BASE_URL = "https://files.example.com";
 
 await expectError("attach: zero size rejected", "bad_request", () =>
   att.createAttachment(owner.id, {
@@ -211,8 +210,10 @@ check(
     created.uploadUrl.startsWith("https://fake-account.r2.cloudflarestorage.com/ledgr/")
 );
 check(
-  "attach: public URL on CDN base",
-  created.publicUrl === `https://files.example.com/${created.storageKey.split("/").map(encodeURIComponent).join("/")}`
+  // ADR-231: there is no CDN base any more. publicUrl survives as a field for
+  // API/MCP back-compat and is now the same stable address as fileUrl.
+  "attach: publicUrl is the stable address, not a provider URL",
+  created.publicUrl === `/files/${created.id}` && created.fileUrl === created.publicUrl
 );
 const listed = await att.listAttachments(owner.id, target.id);
 check(

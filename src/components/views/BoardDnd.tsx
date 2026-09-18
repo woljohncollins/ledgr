@@ -9,9 +9,11 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { ITEM_STATUSES, URGENCIES } from "@/lib/item-enums";
 import { boardDropPatch, groupValueFor, NONE_GROUP, orderedGroups } from "@/lib/view-grouping";
+import BoardColumn from "@/components/views/BoardColumn";
+import { isTerminalCategory } from "@/lib/status";
 import type { ViewGrouping } from "@/lib/views";
 import type { StatusDef } from "@/lib/status";
 import { useBoardTouchDrag } from "./useBoardTouchDrag";
@@ -41,6 +43,9 @@ function moveCard(card: BoardCard, grouping: ViewGrouping, col: string): BoardCa
     props[grouping.propertyKey] = col === NONE_GROUP ? null : col;
     return { ...card, properties: props };
   }
+  // A relation grouping (Tags) isn't droppable — boardDropPatch returns null for
+  // it, so no write is issued and the optimistic card must not move either.
+  if (grouping && "relationRole" in grouping) return card;
   const field = grouping?.field ?? "status";
   if (field === "status") return { ...card, status: col };
   if (field === "urgency") return { ...card, urgency: col === NONE_GROUP ? null : Number(col) };
@@ -50,14 +55,24 @@ function moveCard(card: BoardCard, grouping: ViewGrouping, col: string): BoardCa
 export default function BoardDnd({
   cards,
   grouping,
+  boardKey,
   groupOrder,
   statuses,
+  cardBodies,
 }: {
   cards: BoardCard[];
   grouping: ViewGrouping;
+  // Scopes each column's remembered collapse state to THIS board (the saved
+  // view's id, else the type key) — see board-prefs.ts.
+  boardKey: string;
   groupOrder?: string[];
   // The type's resolved statuses (S2): a status board colors its columns.
   statuses?: StatusDef[];
+  // Rich card bodies keyed by item id (project boards, 2026-08-17): prebuilt
+  // server nodes rendered verbatim inside the draggable <li> instead of the
+  // default title+date card. Their internal anchors set draggable={false}, so
+  // the row's drag still wins.
+  cardBodies?: Record<string, ReactNode>;
 }) {
   const router = useRouter();
   const [items, setItems] = useState(cards);
@@ -81,7 +96,7 @@ export default function BoardDnd({
   const statusBoard =
     !grouping || ("field" in grouping && grouping.field === "status");
   const fullKnown: string[] =
-    grouping && "propertyKey" in grouping
+    grouping && ("propertyKey" in grouping || "relationRole" in grouping)
       ? [...(groupOrder ?? []), NONE_GROUP]
       : (grouping?.field ?? "status") === "urgency"
         ? [...URGENCIES.map(String), NONE_GROUP]
@@ -139,13 +154,34 @@ export default function BoardDnd({
   return (
     // data-scroll-x marks this as a horizontal scroller so a future mobile
     // swipe-nav (explorations/mobile-swipe-navigation.md) won't hijack drags.
-    <div ref={boardRef} data-scroll-x className="mt-4 flex gap-3 overflow-x-auto pb-2">
+    // data-scroll-x marks this as a horizontal scroller so a future mobile
+    // swipe-nav (explorations/mobile-swipe-navigation.md) won't hijack drags.
+    // Scroll-snap gives the phone its one-column-at-a-time swipe, and is dropped
+    // WHILE A CARD IS LIFTED: the touch-drag hook auto-scrolls the board
+    // imperatively when a finger nears the edge, and mandatory snapping fights
+    // that by yanking the scroll back to the nearest column mid-drag. Desktop
+    // never snaps (sm:snap-none) — a mouse drag wants free scrolling.
+    <div
+      ref={boardRef}
+      data-scroll-x
+      className={`mt-4 flex gap-3 overflow-x-auto pb-2 sm:snap-none ${
+        dragId ? "" : "snap-x snap-mandatory"
+      }`}
+    >
       {columns.map((col) => {
         const colItems = items.filter((i) => groupValueFor(i, grouping, now) === col);
+        const sdef = statusBoard ? statuses?.find((s) => s.key === col) : undefined;
         return (
-          <div
+          <BoardColumn
             key={col}
-            data-col={col}
+            col={col}
+            boardKey={boardKey}
+            label={sdef?.label ?? col}
+            color={sdef?.color}
+            count={colItems.length}
+            // Done / archived start collapsed; every other column starts open.
+            defaultCollapsed={sdef ? isTerminalCategory(sdef.category) : false}
+            highlighted={overCol === col && dragId != null}
             onDragOver={(e) => {
               e.preventDefault();
               if (overCol !== col) setOverCol(col);
@@ -154,28 +190,7 @@ export default function BoardDnd({
               e.preventDefault();
               void drop(col);
             }}
-            className={`flex w-60 shrink-0 flex-col rounded-lg border bg-neutral-900/40 ${
-              overCol === col && dragId ? "border-[var(--accent)]" : "border-neutral-800"
-            }`}
           >
-            <div className="flex items-center justify-between border-b border-neutral-800 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-neutral-400">
-              {(() => {
-                const sdef = statusBoard ? statuses?.find((s) => s.key === col) : undefined;
-                return (
-                  <span className="flex items-center gap-1.5 truncate">
-                    {sdef?.color && (
-                      <span
-                        aria-hidden
-                        className="inline-block h-2 w-2 shrink-0 rounded-full"
-                        style={{ backgroundColor: sdef.color }}
-                      />
-                    )}
-                    {sdef?.label ?? col}
-                  </span>
-                );
-              })()}
-              <span className="text-neutral-600">{colItems.length}</span>
-            </div>
             <ul className="flex min-h-12 flex-col gap-1.5 p-2">
               {colItems.map((item) => (
                 <li
@@ -187,28 +202,32 @@ export default function BoardDnd({
                     setDragId(null);
                     setOverCol(null);
                   }}
-                  className={dragId === item.id ? "opacity-40" : ""}
+                  className={`${dragId === item.id ? "opacity-40 " : ""}${
+                    cardBodies?.[item.id] ? "cursor-grab active:cursor-grabbing" : ""
+                  }`}
                 >
-                  <Link
-                    href={`/items/${item.id}`}
-                    // Suppress the anchor's native drag so the <li>'s drag wins;
-                    // a plain click still navigates to the item.
-                    draggable={false}
-                    className={`block cursor-grab rounded border border-neutral-800 bg-neutral-900 px-2.5 py-1.5 text-sm hover:border-neutral-700 active:cursor-grabbing ${
-                      item.title ? "text-neutral-200" : "text-neutral-500"
-                    } ${item.status === "done" ? "line-through opacity-60" : ""}`}
-                  >
-                    <span className="block truncate">{item.title || "Untitled"}</span>
-                    {item.dateLabel && (
-                      <span className="mt-0.5 block text-xs text-neutral-600">
-                        {item.dateLabel}
-                      </span>
-                    )}
-                  </Link>
+                  {cardBodies?.[item.id] ?? (
+                    <Link
+                      href={`/items/${item.id}`}
+                      // Suppress the anchor's native drag so the <li>'s drag wins;
+                      // a plain click still navigates to the item.
+                      draggable={false}
+                      className={`block cursor-grab rounded border border-neutral-800 bg-neutral-900 px-2.5 py-1.5 text-sm hover:border-neutral-700 active:cursor-grabbing ${
+                        item.title ? "text-neutral-200" : "text-neutral-500"
+                      } ${item.status === "done" ? "line-through opacity-60" : ""}`}
+                    >
+                      <span className="block truncate">{item.title || "Untitled"}</span>
+                      {item.dateLabel && (
+                        <span className="mt-0.5 block text-xs text-neutral-600">
+                          {item.dateLabel}
+                        </span>
+                      )}
+                    </Link>
+                  )}
                 </li>
               ))}
             </ul>
-          </div>
+          </BoardColumn>
         );
       })}
     </div>

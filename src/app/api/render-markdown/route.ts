@@ -11,6 +11,8 @@ import { errorResponse, requireOwner } from "@/lib/api";
 import { markdownToHtml } from "@/lib/markdown-render";
 import { hasItemTokens, resolveItemTokens } from "@/lib/item-tokens";
 import { buildItemTokenContext } from "@/lib/item-tokens-service";
+import { collectMentionIdsFromMarkdown } from "@/lib/editor/mention-markdown";
+import { resolveMentions } from "@/lib/mentions";
 
 export const dynamic = "force-dynamic";
 
@@ -41,7 +43,18 @@ export async function POST(request: Request) {
       const ctx = await buildItemTokenContext(owner.id, itemId);
       if (ctx) toRender = resolveItemTokens(text, ctx);
     }
-    return NextResponse.json({ html: markdownToHtml(toRender) });
+    // Type-aware mentions (2026-09-14). Without a resolved map this route fell
+    // into markdownToHtml's "no map" branch, which renders a mention chip with
+    // no target type, so every @-mention wore the generic fallback glyph. The
+    // editor's NodeView resolves separately (GET /api/items?ids=), so the same
+    // chip looked right while editing and wrong the moment the body was read
+    // back: the icon appeared to vanish and reappear depending on the surface.
+    // Print/share already passed this map; the read path just never did.
+    const mentions = await resolveMentions(
+      owner.id,
+      collectMentionIdsFromMarkdown(toRender)
+    );
+    return NextResponse.json({ html: markdownToHtml(toRender, mentions) });
   } catch (err) {
     if (err instanceof SyntaxError) {
       return NextResponse.json({ error: "invalid JSON" }, { status: 400 });

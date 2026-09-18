@@ -25,9 +25,11 @@ export type Breakpoint = "lg" | "md" | "sm";
 // overwrites at render (auto-height), so a stored flow `h` is only a hint.
 export type Cell = { i: CardId; x: number; y: number; w: number; h: number };
 
-// Per-card metadata independent of position. `mode` is flow (height follows
-// content) or fixed (a set cell; content scrolls). `hidden` drops the card from
-// the canvas without losing its place in the vocabulary. (A future `group` slice
+// Per-card metadata independent of position. `mode` is kept in the stored
+// contract for back-compat, but since 2026-09-11 (ADR-256) EVERY card renders as
+// flow: height follows content, nothing scrolls inside a cell (Brandon: "there
+// should never be scrollbars"). `hidden` drops the card from the canvas without
+// losing its place in the vocabulary. (A future `group` slice
 // can add child-id/collapsed fields here without a migration — ADR-069.)
 export type CardMeta = { mode: CardMode; hidden?: boolean };
 
@@ -39,8 +41,10 @@ export type CanvasLayout = {
 
 // --- Grid engine constants (shared with ItemRglInner) --------------------
 // One source of truth for the grid geometry, lifted from the dashboards' RGL
-// (RglInner.tsx) so the item grid feels identical: 12/6/1 columns, a short 40px
-// row for fine vertical control, vertical compaction.
+// (RglInner.tsx): 12/6/1 columns, vertical compaction. The row is deliberately
+// tiny (8px + 12px margin = a 20px step): every card's height is measured from
+// its content and rounded UP to whole rows, so the row unit is the maximum dead
+// space under a card. At the old 40px row a one-line field rounded to 92px.
 export const GRID_COLS: Record<Breakpoint, number> = { lg: 12, md: 6, sm: 1 };
 // RGL chooses the breakpoint by the GRID CONTAINER width, and each surface maps
 // to one (Brandon, 2026-06-17): the full-page expand fills the browser → `lg`
@@ -53,7 +57,7 @@ export const GRID_BREAKPOINT_PX: Record<Breakpoint, number> = {
   md: 480,
   sm: 0,
 };
-export const GRID_ROW_HEIGHT = 40;
+export const GRID_ROW_HEIGHT = 8;
 export const GRID_MARGIN: [number, number] = [16, 12];
 export const BREAKPOINTS: Breakpoint[] = ["lg", "md", "sm"];
 
@@ -66,6 +70,7 @@ type CardKind =
   | "body"
   | "related"
   | "discover"
+  | "files"
   | "saveOffline"
   | "share"
   | "history"
@@ -89,6 +94,7 @@ function kindOf(id: CardId): CardKind {
     case "body":
     case "related":
     case "discover":
+    case "files":
     case "saveOffline":
     case "share":
     case "history":
@@ -107,40 +113,52 @@ function kindOf(id: CardId): CardKind {
   }
 }
 
-// Default mode/size/flowability per kind. `flowable` gates the flow⇄fixed pin
-// (and auto-height): content panels grow; atomic field chips stay fixed (the
-// "small field cards fixed" default from the brief). `w`/`h` seed defaultLayout
-// and the append-on-reconcile placement; `h` for a flow card is a placeholder
-// the measurer replaces.
-type CardSpec = { mode: CardMode; flowable: boolean; w: number; h: number };
+// Default size per kind. `w` seeds defaultLayout and the append-on-reconcile
+// placement; `h` is only a first-paint placeholder (in 20px rows) that the grid's
+// measurer replaces with the content's real height.
+type CardSpec = { w: number; h: number };
 
 const SPECS: Record<CardKind, CardSpec> = {
-  title: { mode: "flow", flowable: true, w: 12, h: 2 },
-  body: { mode: "flow", flowable: true, w: 12, h: 8 },
-  subtasks: { mode: "flow", flowable: true, w: 12, h: 6 },
-  meetingPrep: { mode: "flow", flowable: true, w: 12, h: 6 },
-  meetingNotes: { mode: "flow", flowable: true, w: 12, h: 4 },
-  meetingTranscripts: { mode: "flow", flowable: true, w: 12, h: 5 },
-  recurrence: { mode: "flow", flowable: true, w: 12, h: 2 },
-  recurrenceCalendar: { mode: "flow", flowable: true, w: 12, h: 9 },
-  related: { mode: "flow", flowable: true, w: 12, h: 6 },
-  discover: { mode: "flow", flowable: true, w: 12, h: 4 },
-  relation: { mode: "flow", flowable: true, w: 6, h: 4 },
-  saveOffline: { mode: "flow", flowable: true, w: 12, h: 2 },
-  share: { mode: "flow", flowable: true, w: 12, h: 2 },
-  history: { mode: "flow", flowable: true, w: 12, h: 2 },
-  meta: { mode: "flow", flowable: true, w: 12, h: 3 },
-  system: { mode: "fixed", flowable: false, w: 4, h: 2 },
-  prop: { mode: "fixed", flowable: false, w: 4, h: 2 },
+  title: { w: 12, h: 5 },
+  body: { w: 12, h: 20 },
+  subtasks: { w: 12, h: 15 },
+  meetingPrep: { w: 12, h: 15 },
+  meetingNotes: { w: 12, h: 10 },
+  meetingTranscripts: { w: 12, h: 13 },
+  recurrence: { w: 12, h: 5 },
+  recurrenceCalendar: { w: 12, h: 23 },
+  related: { w: 12, h: 15 },
+  discover: { w: 12, h: 10 },
+  files: { w: 12, h: 8 },
+  relation: { w: 6, h: 10 },
+  saveOffline: { w: 12, h: 3 },
+  share: { w: 12, h: 3 },
+  history: { w: 12, h: 3 },
+  meta: { w: 12, h: 5 },
+  system: { w: 4, h: 3 },
+  prop: { w: 4, h: 3 },
 };
 
 export function cardSpec(id: CardId): CardSpec {
   return SPECS[kindOf(id)];
 }
 
-// Whether a card may be pinned flow⇄fixed (and so auto-heights when flow).
-export function isFlowable(id: CardId): boolean {
-  return SPECS[kindOf(id)].flowable;
+// Cards that always sit UNDER the content: the export/share/history controls and
+// the read-only Details block (Brandon, 2026-09-11: never a property below
+// Type/Created/Updated). Enforced on every read, so a property added later, or a
+// footer card dragged upward, settles back beneath everything else.
+export const FOOTER_IDS: CardId[] = ["saveOffline", "share", "history", "meta"];
+const FOOTER = new Set<CardId>(FOOTER_IDS);
+
+// Move the footer cards below every content card, keeping their arrangement
+// relative to each other (side-by-side stays side-by-side).
+function sinkFooter(cells: Cell[]): Cell[] {
+  const footer = cells.filter((c) => FOOTER.has(c.i));
+  if (footer.length === 0) return cells;
+  const content = cells.filter((c) => !FOOTER.has(c.i));
+  const bottom = content.reduce((m, c) => Math.max(m, c.y + c.h), 0);
+  const top = Math.min(...footer.map((c) => c.y));
+  return [...content, ...footer.map((c) => ({ ...c, y: bottom + (c.y - top) }))];
 }
 
 // --- Vocabulary + labels --------------------------------------------------
@@ -165,7 +183,10 @@ export function cardVocabulary(
   for (const p of propertySchema) {
     if (p.kind === "relation") ids.push(`rel:${p.key}`);
   }
-  ids.push("related", "discover", "saveOffline", "share", "history", "meta");
+  // files sits where the classic canvases place the Files section: after the
+  // content web, before export (ADR-237 addendum 3 — an arrangeable card, so
+  // the owner decides where it lives; reconcile appends it to saved layouts).
+  ids.push("related", "discover", "files", "saveOffline", "share", "history", "meta");
   return ids;
 }
 
@@ -174,6 +195,7 @@ const STATIC_LABELS: Record<string, string> = {
   body: "Body",
   related: "Related",
   discover: "Discover related",
+  files: "Files",
   saveOffline: "Save Offline",
   share: "Share",
   history: "Version History",
@@ -237,7 +259,7 @@ export function defaultLayout(
 ): CanvasLayout {
   const vocab = cardVocabulary(type, propertySchema);
   const cards: Record<CardId, CardMeta> = {};
-  for (const id of vocab) cards[id] = { mode: cardSpec(id).mode };
+  for (const id of vocab) cards[id] = { mode: "flow" };
   return {
     version: VERSION,
     cards,
@@ -362,8 +384,8 @@ export function deriveResponsive(layout: CanvasLayout): CanvasLayout {
 }
 
 // Keep a stored layout in step with the type's current vocabulary: drop cards no
-// longer present (a deleted property) and append newly-added cards (a property
-// added later) at the bottom. Run on every read so the grid never goes stale
+// longer present (a deleted property), append newly-added cards (a property
+// added later) at the bottom of the CONTENT, and sink the footer cards under it. Run on every read so the grid never goes stale
 // when a type's schema changes. Returns a layout covering exactly the vocabulary.
 export function reconcile(
   layout: CanvasLayout,
@@ -375,7 +397,7 @@ export function reconcile(
 
   const cards: Record<CardId, CardMeta> = {};
   for (const id of vocab) {
-    cards[id] = layout.cards[id] ?? { mode: cardSpec(id).mode };
+    cards[id] = layout.cards[id] ?? { mode: "flow" };
   }
 
   const layouts = {} as Record<Breakpoint, Cell[]>;
@@ -401,7 +423,7 @@ export function reconcile(
       x += w;
       rowH = Math.max(rowH, spec.h);
     }
-    layouts[bp] = cells;
+    layouts[bp] = sinkFooter(cells);
   }
   return deriveResponsive({ version: VERSION, cards, layouts });
 }

@@ -9,6 +9,7 @@ import { NextResponse } from "next/server";
 import { ItemError, getItem } from "@/lib/items";
 import { renderPrintDocument } from "@/lib/print-html";
 import { resolveOwner } from "@/lib/owner";
+import { getSettings } from "@/lib/settings";
 import { resolveMentions } from "@/lib/mentions";
 import { bodyMarkdown, makeMarkdownBody } from "@/lib/body";
 import { boothExport } from "@/lib/editor/booth-export";
@@ -69,10 +70,14 @@ export async function GET(
   // pinned offline copy and a public link render identically.
   // The booth copy says so on the page: whoever is holding it should be able to
   // tell at a glance that it isn't the preacher's own annotated manuscript.
+  // The owner's accent, so an accent highlight ("My highlight") keeps its color
+  // in a document that carries no app context (getSettings is request-cached).
+  const ownerSettings = await getSettings(owner.id);
+  const accent = ownerSettings.highlightColor;
   const html = renderPrintDocument(
     booth ? `${resolved.title} — Presentation Copy` : resolved.title,
     printBody,
-    { mentions, comments: showComments }
+    { mentions, comments: showComments, accent, theme: ownerSettings.theme }
   );
 
   return new NextResponse(html, {

@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { verifyMintedCredential } from "@/lib/auth/credentials";
 import { verifyMachineToken } from "@/lib/auth/machine";
 import {
   MCP_SCOPE,
@@ -28,16 +29,20 @@ export const dynamic = "force-dynamic";
 type WithId = { id?: string | number | null };
 
 export async function POST(request: Request) {
-  // Auth first, two credential paths (ADR-117), both granting the `mcp` scope:
-  // the static machine token (ADR-004, used by Claude Code/Desktop + machine
-  // callers) OR an OAuth access token (used by claude.ai web + the mobile apps,
-  // which only speak OAuth). A bad or unscoped credential gets a flat 401; we
-  // never say which check failed. When the OAuth shim is configured, the 401
-  // carries a WWW-Authenticate hint (RFC 9728) so a connector can discover the
-  // flow instead of just failing.
+  // Auth first, three credential paths, all granting the `mcp` scope: the
+  // static machine token (ADR-004, used by Claude Code/Desktop + machine
+  // callers), an OAuth access token (ADR-117, used by claude.ai web + the
+  // mobile apps, which only speak OAuth), OR a minted credential from User
+  // Settings (ADR-224, a key id + secret over Basic). A bad or unscoped
+  // credential gets a flat 401; we never say which check failed. When the OAuth
+  // shim is configured, the 401 carries a WWW-Authenticate hint (RFC 9728) so a
+  // connector can discover the flow instead of just failing. The two stateless
+  // checks run first, so the DB lookup only happens when neither matched.
   const authz = request.headers.get("authorization");
   const authorized =
-    verifyMachineToken(authz, "mcp") || verifyAccessToken(authz, MCP_SCOPE);
+    verifyMachineToken(authz, "mcp") ||
+    verifyAccessToken(authz, MCP_SCOPE) ||
+    (await verifyMintedCredential(authz, "mcp"));
   if (!authorized) {
     const headers: Record<string, string> = {};
     if (oauthConfigured()) {

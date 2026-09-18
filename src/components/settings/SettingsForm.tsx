@@ -11,6 +11,7 @@ import { useState } from "react";
 import {
   HIGHLIGHT_COLORS,
   HIGHLIGHT_GRADIENTS,
+  ITEM_OPEN_MODES,
   NAV_POSITIONS,
   NOTIFICATION_KINDS,
   notificationEnabled,
@@ -23,7 +24,10 @@ import {
   type TextSize,
   type UiDensity,
   type UserSettings,
+  THEMES,
+  THEME_LABELS,
 } from "@/lib/settings";
+import { accentHighlightImageCss } from "@/lib/colors";
 import { TOOLBAR_ITEMS } from "@/components/markdown-editor/toolbar-icons";
 import { NOTIFICATION_CENTER_ENABLED } from "@/lib/notifications-enabled";
 import AiMemoryLearnMore from "@/components/settings/AiMemoryLearnMore";
@@ -34,6 +38,15 @@ const POSITION_LABELS: Record<UserSettings["navPosition"], string> = {
   bottom: "Bottom",
   left: "Left",
   right: "Right",
+};
+
+// Where a clicked item opens. "Automatic" names the measured behavior rather than
+// hiding it, so the default is a visible choice instead of an unexplained one.
+const ITEM_OPEN_LABELS: Record<UserSettings["itemOpenMode"], string> = {
+  auto: "Automatic",
+  left: "Panel, left",
+  right: "Panel, right",
+  center: "Popup",
 };
 
 const UI_DENSITY_LABELS: Record<UiDensity, string> = {
@@ -128,9 +141,21 @@ export default function SettingsForm({
   // Push the chosen accent to the live CSS vars: `--accent` is always a solid
   // (so text/borders/glows stay valid); `--accent-gradient` is the gradient when
   // one is picked, else the same solid.
+  //
+  // `--accent-highlight-image` has to move with them (ADR-250). It is the image
+  // channel of the accent highlight, and for a GRADIENT accent it is the only
+  // layer you can actually see, painting over the `background-color` underneath.
+  // Leaving it out here is what made changing your accent look like it did
+  // nothing: `--accent` updated instantly, the highlight kept the gradient the
+  // server wrote at page load, and it only corrected on a full reload. These
+  // three vars are one setting; they get written together or the highlight lies.
   const applyAccent = (color: string, gradient: string | null) => {
     document.body.style.setProperty("--accent", color);
     document.body.style.setProperty("--accent-gradient", gradient ?? color);
+    document.body.style.setProperty(
+      "--accent-highlight-image",
+      gradient ? accentHighlightImageCss(gradient) : "none"
+    );
   };
 
   const applyTextSize = (size: TextSize) => {
@@ -243,6 +268,9 @@ export default function SettingsForm({
           {[
             { id: "deadline", label: "Deadline (due date)" },
             { id: "priority", label: "Priority" },
+            { id: "tags", label: "Tag" },
+            { id: "person", label: "Person" },
+            { id: "group", label: "Group" },
             { id: "assignee", label: "Assignee" },
           ].map((it) => {
             const shown = !settings.quickAddHidden.includes(it.id);
@@ -571,6 +599,25 @@ export default function SettingsForm({
       </section>
 
       <section>
+        <h2 className="text-sm font-semibold text-neutral-200">Theme</h2>
+        <p className="mt-0.5 text-sm text-neutral-500">
+          The app&apos;s overall look. Applies everywhere you&apos;re signed in, and
+          new share links open in this theme by default.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-1">
+          {THEMES.map((t) => (
+            <button
+              key={t}
+              onClick={() => void save({ theme: t }, true)}
+              className={segBtn(settings.theme === t)}
+            >
+              {THEME_LABELS[t]}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section>
         <h2 className="text-sm font-semibold text-neutral-200">Display density</h2>
         <p className="mt-0.5 text-sm text-neutral-500">
           How much space the whole interface uses. Menus, buttons, titles, and
@@ -633,6 +680,38 @@ export default function SettingsForm({
             </button>
           ))}
         </div>
+      </section>
+
+      {/* Where an item opens when you click it from a list. Sits right after the
+          nav position because the two interact: a docked rail owns its edge, so a
+          left rail plus a left panel falls back to the free edge (or the popup). */}
+      <section>
+        <h2 className="text-sm font-semibold text-neutral-200">Opening an item</h2>
+        <p className="mt-0.5 text-sm text-neutral-500">
+          Where an item opens when you click it from a list. Automatic docks a
+          panel on wide screens and uses the popup otherwise. A phone always uses
+          the bottom sheet.
+        </p>
+        <div className="mt-2 grid w-48 grid-cols-2 gap-1">
+          {ITEM_OPEN_MODES.map((m) => (
+            <button
+              key={m}
+              onClick={() => void save({ itemOpenMode: m }, true)}
+              className={segBtn(settings.itemOpenMode === m)}
+            >
+              {ITEM_OPEN_LABELS[m]}
+            </button>
+          ))}
+        </div>
+        {/* Name the collision rather than letting it look like the setting was
+            ignored — the exact "invisible behavior" trap ADR-179 came from. */}
+        {(settings.itemOpenMode === "left" || settings.itemOpenMode === "right") &&
+          settings.navPosition === settings.itemOpenMode && (
+            <p className="mt-1.5 text-xs text-amber-400/80">
+              Your nav rail is docked {settings.itemOpenMode}, so the panel opens on
+              the opposite edge instead.
+            </p>
+          )}
       </section>
 
       {/* Spacing mirrors the More menu: how the slots pack into the bar/rail.

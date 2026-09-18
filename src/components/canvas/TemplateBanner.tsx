@@ -8,6 +8,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { openItem } from "@/lib/item-nav";
 import ConfirmButton from "@/components/ui/ConfirmButton";
 import TemplateDatesControl from "@/components/canvas/TemplateDatesControl";
 import type { ApplyConfig } from "@/lib/template-vars";
@@ -111,7 +112,7 @@ export default function TemplateBanner({
         return;
       }
       const { template } = (await res.json()) as { template: { prototypeItemId: string } };
-      router.push(`/items/${template.prototypeItemId}`);
+      openItem(router, template.prototypeItemId);
       router.refresh();
     } catch {
       setError("failed (offline?)");

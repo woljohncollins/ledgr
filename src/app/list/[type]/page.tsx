@@ -16,6 +16,7 @@ import ListLenses from "@/components/lists/ListLenses";
 import ListPage from "@/components/lists/ListPage";
 import LoadMore from "@/components/lists/LoadMore";
 import ViewLensBody from "@/components/lists/ViewLensBody";
+import CompletedLensBody from "@/components/lists/CompletedLensBody";
 import CalendarFeed from "@/components/calendar/CalendarFeed";
 import EventTimeline from "@/components/events/EventTimeline";
 import { listCalendarFeed, type FeedEvent } from "@/lib/calendar/feed";
@@ -39,7 +40,8 @@ import { resolveOwner } from "@/lib/owner";
 import { getSettings } from "@/lib/settings";
 import { getType } from "@/lib/types";
 import { listProjectCardData } from "@/lib/project-cards";
-import { resolveViewLens } from "@/lib/view-render";
+import { resolveProjectCardConfig } from "@/lib/project-card-config";
+import { resolveSyntheticLens, resolveViewLens } from "@/lib/view-render";
 import {
   countViewItems,
   parseListWindow,
@@ -82,8 +84,16 @@ export default async function TypeList({
 
   // A view lens renders its saved view; a missing/deleted view (null) falls back
   // to the default sorted list below.
+  // A view lens renders its saved view; the BOARD and COMPLETED lenses render a
+  // view definition synthesized from the type (no saved view needed, so a type
+  // can ship a kanban as its default tab). All three land in the same
+  // ViewRenderer pipeline below.
   const viewData =
-    active.kind === "view" ? await resolveViewLens(owner.id, active.viewId, type) : null;
+    active.kind === "view"
+      ? await resolveViewLens(owner.id, active.viewId, type)
+      : active.kind === "board" || active.kind === "completed"
+        ? await resolveSyntheticLens(owner.id, type, active.kind, active.label)
+        : null;
 
   // Sort path: the type's select/multi_select properties become list filters,
   // and the active sort lens (reversible) orders a window of rows (Load-more
@@ -130,10 +140,14 @@ export default async function TypeList({
   }
 
   // The Projects list renders as a card grid (Tyler, 2026-07-01) on the default
-  // sort path; a saved view lens still renders via ViewRenderer.
+  // sort path; a saved view lens still renders via ViewRenderer (which resolves
+  // its own project cards for a project-scoped list/board lens). The card's
+  // element set is the owner's type default (Build → Types → Project → "Card
+  // elements"), falling back to the classic card.
+  const cardConfig = resolveProjectCardConfig(null, settings.cardsByType["project"]);
   const projectCards =
     type === "project" && !viewData && items.length > 0
-      ? await listProjectCardData(owner.id, items)
+      ? await listProjectCardData(owner.id, items, cardConfig, new Set(settings.favorites))
       : [];
 
   // Subtask "n/m" rollups + a linked-item summary for the in-view rows (empty
@@ -179,7 +193,11 @@ export default async function TypeList({
         params={sp}
         editHref={`/build/types/${type}/edit`}
       />
-      {viewData ? (
+      {viewData && active.kind === "completed" ? (
+        // Completed work gets the search box instead of the bulk-select layer:
+        // the job here is finding one finished thing again, not acting on many.
+        <CompletedLensBody data={viewData} ownerId={owner.id} typeLabel={typeDef.label} />
+      ) : viewData ? (
         <ViewLensBody data={viewData} bulkConfig={bulkConfigForType(typeDef)} ownerId={owner.id} />
       ) : active.kind === "calendar" ? (
         <CalendarFeed events={feed ?? []} now={now} tz={tz} />
@@ -212,7 +230,7 @@ export default async function TypeList({
           )}
           {items.length > 0 && type === "project" ? (
             <>
-              <ProjectCardGrid cards={projectCards} />
+              <ProjectCardGrid cards={projectCards} config={cardConfig} />
               <LoadMore shown={items.length} total={count} basePath={`/list/${type}`} params={sp} />
             </>
           ) : items.length > 0 ? (

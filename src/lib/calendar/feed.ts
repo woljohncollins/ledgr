@@ -6,6 +6,7 @@ import { getDb } from "@/db";
 import { calendarEvents, items } from "@/db/schema";
 import { ItemError } from "@/lib/items";
 import { getAppTimezone } from "@/lib/today";
+import { DEFAULT_WINDOW_DAYS } from "./sync";
 import { applyEventIntake } from "./intake";
 import type { OverlayEvent } from "./overlay";
 import type { CalendarEvent } from "./types";
@@ -41,12 +42,17 @@ type CacheMeta = {
 
 // The upcoming, un-promoted, non-cancelled events — the calendar feed. Ordered
 // by start, capped. Owner-scoped + index-backed (calendar_events_feed_idx).
+// windowDays widens the horizon past the UI's near-term default for callers that
+// want the whole cache (the MCP tool: an agent routing an agenda item onto a
+// meeting three weeks out). Capped at the cache's own window — beyond it there
+// is nothing to read.
 export async function listCalendarFeed(
   ownerId: string,
-  opts: { now?: Date; limit?: number } = {}
+  opts: { now?: Date; limit?: number; windowDays?: number } = {}
 ): Promise<FeedEvent[]> {
   const now = opts.now ?? new Date();
-  const feedEnd = new Date(now.getTime() + FEED_WINDOW_DAYS * 24 * 60 * 60 * 1000);
+  const days = Math.min(Math.max(opts.windowDays ?? FEED_WINDOW_DAYS, 1), DEFAULT_WINDOW_DAYS);
+  const feedEnd = new Date(now.getTime() + days * 24 * 60 * 60 * 1000);
   const rows = await getDb()
     .select({
       id: calendarEvents.id,

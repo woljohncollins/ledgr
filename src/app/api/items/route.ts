@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
-import { errorResponse, parseItemPayload, requireOwner } from "@/lib/api";
+import { asUuid, errorResponse, parseItemPayload, requireOwner } from "@/lib/api";
 import {
-  ITEM_STATUSES,
   listItems,
   type ItemStatus,
   type ListOptions,
 } from "@/lib/items";
 import { createItem } from "@/lib/item-mutations";
+import { relateItems } from "@/lib/relations";
 import { resolveMentions } from "@/lib/mentions";
 
 export const dynamic = "force-dynamic";
@@ -49,9 +49,13 @@ export async function GET(request: Request) {
     if (inbox !== null) opts.inbox = inbox === "true";
     const status = params.get("status");
     if (status !== null) {
-      if (!ITEM_STATUSES.includes(status as ItemStatus)) {
+      // A status KEY, not the inherited default set (ADR-243): statuses are
+      // user-defined per type, so gating this on ITEM_STATUSES made every custom
+      // stage unfilterable. Shape-check only — an unknown key just matches
+      // nothing, which is the honest answer for a filter.
+      if (!/^[a-z][a-z0-9_]*$/.test(status) || status.length > 40) {
         return NextResponse.json(
-          { error: `status must be one of: ${ITEM_STATUSES.join(", ")}` },
+          { error: "status must be a status key (a slug: letters, digits, _)" },
           { status: 400 }
         );
       }
@@ -74,9 +78,34 @@ export async function POST(request: Request) {
   if (owner instanceof NextResponse) return owner;
 
   try {
-    const input = parseItemPayload(await request.json(), "create");
+    const raw = (await request.json()) as Record<string, unknown>;
+    const input = parseItemPayload(raw, "create");
     const item = await createItem(owner.id, input);
-    return NextResponse.json({ item }, { status: 201 });
+    // Atomic relate (ADR-202 addendum 5, additive — the ADR-183 carve-out):
+    // optional `relateTo: [{ targetId, role? }]` writes the edges in the SAME
+    // request as the create. The old client flow POSTed relations afterwards
+    // and swallowed failures, so a task could exist without its project — and
+    // the offline outbox replayed the bare create, dropping the association
+    // entirely. Edge failures don't undo the create; they come back as
+    // `relateErrors` so the client can say so.
+    const relateErrors: string[] = [];
+    if (Array.isArray(raw?.relateTo)) {
+      for (const entry of raw.relateTo.slice(0, 20)) {
+        const e = entry as Record<string, unknown>;
+        try {
+          const targetId = asUuid(e?.targetId, "relateTo targetId");
+          const role =
+            typeof e?.role === "string" && e.role.trim() ? e.role.trim() : undefined;
+          await relateItems(owner.id, item.id, targetId, role);
+        } catch (err) {
+          relateErrors.push(err instanceof Error ? err.message : "relate failed");
+        }
+      }
+    }
+    return NextResponse.json(
+      relateErrors.length > 0 ? { item, relateErrors } : { item },
+      { status: 201 }
+    );
   } catch (err) {
     if (err instanceof SyntaxError) {
       return NextResponse.json({ error: "invalid JSON" }, { status: 400 });

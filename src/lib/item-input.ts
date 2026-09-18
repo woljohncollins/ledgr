@@ -115,6 +115,15 @@ export function parseItemPayload(
     if (typeof input.inbox !== "boolean") bad("inbox must be a boolean");
     out.inbox = input.inbox;
   }
+  // Which arrival path made this item (ADR-249). Create-only, and consulted
+  // only when `inbox` is absent: it names the path so createItem can look up
+  // where the owner told that path to file things. Free text, matching
+  // settings.inboxRoutes' keys, and an unrecognized one falls back to that
+  // source's default rather than erroring — so the browser capture paths and
+  // the offline outbox can send it without a client/server version handshake.
+  if (mode === "create" && input.source !== undefined) {
+    out.source = asString(input.source, "source");
+  }
   // Next Action (ADR-111/PJ2): a task pointer (uuid) and/or free text, both
   // nullable; the record page's Next Action widget sets them.
   if (input.nextActionTaskId !== undefined) {

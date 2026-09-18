@@ -28,7 +28,7 @@ type ItemHit = { id: string; title: string; type: string };
 type IndexData = {
   types: { key: string; label: string; icon: string | null }[];
   views: { id: string; name: string }[];
-  templates: { id: string; name: string; type: string }[];
+  templates: { id: string; name: string; type: string; prototypeItemId: string }[];
 };
 
 const EMPTY_GROUP_CAP = 6; // jump-list size per group before any query

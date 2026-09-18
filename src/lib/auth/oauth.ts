@@ -44,6 +44,9 @@ type BasePayload = {
 export type ClientPayload = BasePayload & {
   t: "client";
   redirect_uris: string[];
+  // Display name from DCR metadata (RFC 7591 client_name), shown on the
+  // consent page. Optional: client_ids minted before it existed verify fine.
+  client_name?: string;
 };
 
 export type CodePayload = BasePayload & {
@@ -58,6 +61,13 @@ export type AccessPayload = BasePayload & {
   t: "access";
   scope: string;
   sub: string;
+  // Optional caller label carried by browser-minted app tokens (ADR-179), e.g.
+  // "overtone". Purely for identification — it names the caller in machine-route
+  // logs so a token is traceable to the app it was issued for. It is NOT a
+  // revocation handle (these tokens stay stateless; revocation is still
+  // rotate-the-purpose-secret). Absent on every pre-ADR-179 token, which keeps
+  // verifying unchanged.
+  lbl?: string;
 };
 
 export type RefreshPayload = BasePayload & {
@@ -142,7 +152,7 @@ function nowSeconds(): number {
 // row. Single-user, so registration is permissive (any well-formed request
 // succeeds); the signature is what binds the redirect_uri at authorize time.
 
-export function issueClientId(redirectUris: string[]): string {
+export function issueClientId(redirectUris: string[], clientName?: string): string {
   const iat = nowSeconds();
   const payload: ClientPayload = {
     t: "client",
@@ -151,6 +161,7 @@ export function issueClientId(redirectUris: string[]): string {
     // exp so the same verify path (which requires exp) applies uniformly.
     exp: iat + REFRESH_TTL_SECONDS,
     redirect_uris: redirectUris,
+    ...(clientName ? { client_name: clientName } : {}),
   };
   return signToken(payload);
 }
@@ -190,7 +201,8 @@ export function issueAccessToken(
   sub: string,
   scope: string,
   ttlSeconds = ACCESS_TTL_SECONDS,
-  key = secret()
+  key = secret(),
+  label?: string
 ): string {
   const iat = nowSeconds();
   const payload: AccessPayload = {
@@ -200,6 +212,7 @@ export function issueAccessToken(
     scope,
     sub,
   };
+  if (label) payload.lbl = label;
   return signToken(payload, key);
 }
 
@@ -290,10 +303,58 @@ export function verifyClipperToken(
   return payload;
 }
 
+// --- browser-minted app tokens (ADR-179) ------------------------------------
+// The third purpose, for external apps that push data into Ledgr over the HTTP
+// API (the first is Overtone). Same `access`/`api` shape as the clipper token,
+// but signed with its OWN secret so an app is revocable without killing the
+// clipper — the separation Brandon asked for between the two, extended to a
+// third caller. Carries an optional label naming the app, so machine-route logs
+// read "app:overtone" rather than an anonymous api caller.
+
+function appSecret(): string | undefined {
+  return process.env.LEDGR_APP_SECRET || undefined;
+}
+
+// Whether the app-token minting/verification path is wired up, reported the same
+// way oauthConfigured/clipperConfigured/hasScopedToken surface configured-ness.
+export function appConfigured(): boolean {
+  return !!appSecret();
+}
+
+// Label rule mirrors make-token.mjs's name rule (lowercase, digits, hyphens) so
+// a minted token's label and a CLI entry's name read the same in logs.
+export function isValidTokenLabel(label: string): boolean {
+  return /^[a-z0-9-]{1,32}$/.test(label);
+}
+
+export function signAppToken(sub: string, label: string): string {
+  const key = appSecret();
+  if (!key) throw new Error("LEDGR_APP_SECRET not configured");
+  if (!isValidTokenLabel(label)) throw new Error("invalid token label");
+  return issueAccessToken(sub, "api", MINTED_TTL_SECONDS, key, label);
+}
+
+// Verifies a browser-minted app token: an `api`-scoped access token signed with
+// the app secret. Null (→ the caller's 401) when the secret is unset, the
+// signature/kind/expiry fail, or the `api` scope is absent.
+export function verifyAppToken(
+  authorizationHeader: string | null
+): AccessPayload | null {
+  const key = appSecret();
+  if (!key || !authorizationHeader?.startsWith("Bearer ")) return null;
+  const token = authorizationHeader.slice("Bearer ".length).trim();
+  const payload = verifyToken<AccessPayload>(token, "access", key);
+  if (!payload) return null;
+  if (!payload.scope.split(" ").includes("api")) return null;
+  return payload;
+}
+
 // The `api`-scope credential check for the HTTP API + web-clipper routes: the
 // static env token (Savor / CLI-minted, ADR-004) OR a browser-minted clipper
-// token. Returns an identity-or-null with the same contract as
-// verifyMachineToken, so the routes only swap which function they call.
+// token OR a browser-minted app token. Returns an identity-or-null with the same
+// contract as verifyMachineToken, so the routes only swap which function they
+// call. Each path is tried in turn and the first match wins; they can't collide,
+// since a token only verifies under the one secret that signed it.
 export function verifyApiToken(
   authorizationHeader: string | null
 ): MachineIdentity | null {
@@ -301,6 +362,12 @@ export function verifyApiToken(
   if (machine) return machine;
   const clipper = verifyClipperToken(authorizationHeader);
   if (clipper) return { name: "clipper", scopes: clipper.scope.split(" ") };
+  const app = verifyAppToken(authorizationHeader);
+  if (app)
+    return {
+      name: app.lbl ? `app:${app.lbl}` : "app",
+      scopes: app.scope.split(" "),
+    };
   return null;
 }
 

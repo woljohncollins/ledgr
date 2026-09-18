@@ -6,6 +6,7 @@ import {
   requireOwner,
 } from "@/lib/api";
 import { getItem } from "@/lib/items";
+import { resolveSurfaces } from "@/lib/item-surfaces";
 import { softDeleteItem, updateItem } from "@/lib/item-mutations";
 
 export const dynamic = "force-dynamic";
@@ -13,13 +14,22 @@ export const dynamic = "force-dynamic";
 type Context = { params: Promise<{ id: string }> };
 
 // GET /api/items/[id] — the one place a body is read.
+//
+// Also returns `surfaces` (ADR-260): the named places this type's content lives,
+// each with what belongs there and what is stored in it. A paper returns Notes,
+// Shape, Quote Bank, Outline and Draft; a song returns Notes and Chart; an
+// ordinary type returns its single body surface. The DATA was always here — the
+// item carries `properties` wholesale — but nothing named it, so a caller had an
+// untyped blob and no way to tell a paper's draft from its scratch notes. Same
+// resolver MCP's get_item uses, so the two can't drift.
 export async function GET(_request: Request, context: Context) {
   const owner = await requireOwner();
   if (owner instanceof NextResponse) return owner;
 
   try {
     const id = asUuid((await context.params).id, "id");
-    return NextResponse.json({ item: await getItem(owner.id, id) });
+    const item = await getItem(owner.id, id);
+    return NextResponse.json({ item, surfaces: await resolveSurfaces(item) });
   } catch (err) {
     return errorResponse(err);
   }

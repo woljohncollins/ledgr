@@ -1,20 +1,13 @@
-// Slice 21 verification: the shared app-only Microsoft Graph client
-// (src/lib/graph/client). Exercises config detection, a real client-
-// credentials token grant against the live Microsoft identity platform
-// (the export registration's secret is in .env.local), the module-scope
-// token cache, the secret-expiry canary (via a temporarily bogus secret),
-// the "not configured" path, and a Calendars.Read probe whose 403 is the
-// signal that the mailbox permission + Application Access Policy
-// (Brandon-step, runbook §1c) are not in place yet.
-//
-// Run with: npx tsx scripts/verify-graph-auth.mts
-// Safe to delete once the slice is closed. Makes no DB writes.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
-for (const line of readFileSync(".env.local", "utf8").replace(/^﻿/, "").split(/\r?\n/)) {
-  const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
-  if (m && !process.env[m[1]]) {
-    process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, "");
+// .env.local is gitignored, so it is present locally and ABSENT in CI. A bare
+// readFileSync here used to throw ENOENT, which is why this script passed on a
+// developer machine and failed on CI's first run. The load is optional — the
+// checks below assert whichever branch the env puts them in.
+if (existsSync(".env.local")) {
+  for (const line of readFileSync(".env.local", "utf8").replace(/^\uFEFF/, "").split(/\r?\n/)) {
+    const m = line.match(/^([A-Z0-9_]+)=(.*)$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, "");
   }
 }
 
@@ -55,12 +48,24 @@ globalThis.fetch = ((input: Parameters<typeof fetch>[0], init?: Parameters<typeo
 
 try {
   // --- config detection ---------------------------------------------------
-  check("getGraphCredentials() populated when env set", getGraphCredentials() !== null);
+  // Config detection cuts BOTH ways, and these two used to assert only the
+  // configured half unconditionally — so the script could pass only on a machine
+  // holding real GRAPH_* secrets, and failed everywhere else (including CI, and
+  // any instance that doesn't use Microsoft). It had been failing silently because
+  // nothing ran it. Assert the branch that actually applies: populated when the
+  // env is set, and cleanly null when it isn't. Both are real behavior worth
+  // holding, and neither needs a secret to check.
+  if (haveCreds) {
+    check("getGraphCredentials() populated when env set", getGraphCredentials() !== null);
+    check("export getGraphConfig() populated when env set", getGraphConfig() !== null);
+  } else {
+    check("getGraphCredentials() is null when env is unset", getGraphCredentials() === null);
+    check("export getGraphConfig() is null when env is unset", getGraphConfig() === null);
+  }
   check(
     "getGraphMailboxUpn() falls back to ONEDRIVE_EXPORT_UPN",
     getGraphMailboxUpn() === (process.env.GRAPH_MAILBOX_UPN || process.env.ONEDRIVE_EXPORT_UPN || null)
   );
-  check("export getGraphConfig() populated when env set", getGraphConfig() !== null);
 
   if (!haveCreds) {
     info("GRAPH_* not configured locally — skipping live token checks.");

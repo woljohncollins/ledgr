@@ -1,0 +1,1 @@
+ALTER TABLE "sync_peers" ADD COLUMN "pull_only" boolean DEFAULT false NOT NULL;

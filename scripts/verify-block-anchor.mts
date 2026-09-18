@@ -16,6 +16,9 @@ const {
   stripBlockAnchors,
   uniqueBlockId,
 } = await import("../src/lib/editor/block-anchor");
+const { detectMentionToken } = await import(
+  "../src/components/capture/useMentionTypeahead"
+);
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -156,6 +159,26 @@ const findDoc = [
 {
   const r = ensureAnchorOnLine(findDoc, 99);
   check("ensureAnchorOnLine refuses an out-of-range line", "error" in r);
+}
+
+// An anchor ends an "@mention" token (both mention surfaces share this rule).
+// Without it, a caret parked at the end of "…@Roger-Tester ^1nr6v7" swept the
+// anchor into the query and the picker offered to create an item named after it.
+{
+  const line = "Email the budget memo @Roger-Tester ^1nr6v7";
+  check(
+    "a caret past a trailing anchor is not a mention",
+    detectMentionToken(line, line.length) === null
+  );
+  const inside = line.indexOf(" ^");
+  check(
+    "a caret still inside the mention is unaffected",
+    detectMentionToken(line, inside)?.rawQuery === "Roger-Tester"
+  );
+  check(
+    "a line with no anchor still mentions normally",
+    detectMentionToken("Email @Roger Smith", 18)?.rawQuery === "Roger Smith"
+  );
 }
 
 console.log(failures === 0 ? "\nAll block-anchor checks passed." : `\n${failures} FAILED`);

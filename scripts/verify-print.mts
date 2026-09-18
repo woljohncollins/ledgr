@@ -7,7 +7,7 @@ import { markdownToHtml } from "../src/lib/markdown-render";
 import { renderPrintDocument, escapeHtml } from "../src/lib/print-html";
 import { makeMarkdownBody } from "../src/lib/body";
 import { mentionToMarkdown } from "../src/lib/editor/mention-markdown";
-import { textColorTag, highlightTag } from "../src/lib/colors";
+import { ACCENT_HIGHLIGHT, textColorTag, highlightTag } from "../src/lib/colors";
 
 let failures = 0;
 function check(name: string, ok: boolean, detail = "") {
@@ -89,6 +89,26 @@ check("shell escapes the title", doc.includes("<h1>Sermon &lt;Notes&gt;</h1>"));
 check("shell renders the body markdown", doc.includes("<h2>Intro</h2>") && doc.includes("<p>Grace.</p>"));
 check("shell is a complete, self-contained page", doc.startsWith("<!doctype html>") && doc.includes("<style>") && doc.includes("window.print()"));
 check("shell hl-* CSS is present for highlights", doc.includes("mark.hl-yellow{"));
+
+// The accent highlight in THIS document (colors.ts). The shell carries no app
+// context, so a live `var(--accent)` has nothing to resolve against: the owner's
+// accent is resolved server-side into a literal. A var() reaching this page would
+// render as no highlight at all, which is the Sunday-proof failure to guard.
+const accentMd = `${highlightTag(ACCENT_HIGHLIGHT).open}grace${highlightTag(ACCENT_HIGHLIGHT).close}`;
+const accentDoc = renderPrintDocument("T", makeMarkdownBody(accentMd), { accent: "#2563eb" });
+check(
+  "accent highlight gets a literal rule in the shell, with no var() left in it",
+  accentDoc.includes("mark.hl-accent{background-color:rgba(37,99,235,0.4)"),
+  accentDoc.match(/mark\.hl-accent\{[^}]*\}/)?.[0] ?? "no rule",
+);
+check(
+  "that rule keeps color:inherit, so a highlight can't repaint colored text",
+  /mark\.hl-accent\{[^}]*color:inherit/.test(accentDoc),
+);
+check(
+  "no accent rule when the caller passes no accent",
+  !renderPrintDocument("T", makeMarkdownBody(accentMd)).includes("mark.hl-accent{"),
+);
 const shared = renderPrintDocument("Doc", makeMarkdownBody("Body."), { footerHtml: "Shared from Ledgr · read-only" });
 check("footer appears when given", shared.includes('<div class="doc-footer">Shared from Ledgr · read-only</div>'));
 check("no footer element by default", !doc.includes('<div class="doc-footer">'));

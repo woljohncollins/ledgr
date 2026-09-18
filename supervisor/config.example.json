@@ -1,0 +1,24 @@
+{
+  "role": "spoke",
+  "dataDir": "C:/ledgr-data",
+  "repoDir": "..",
+  "branch": "main",
+  "appPort": 3000,
+  "dbPort": 5433,
+  "ownerEmail": "you@example.com",
+  "hubs": ["https://your-hub.example.com"],
+  "deviceToken": "",
+  "syncMode": "full",
+  "update": { "mode": "prompted", "pollIntervalMs": 900000 },
+  "crons": { "purge": true, "relatedness": true },
+  "tunePostgres": true,
+  "postgresFlags": [],
+  "cadence": { "pushDebounceMs": 2000, "pullMs": 10000 },
+  "syncGuardrails": {
+    "maxFirstPush": 500,
+    "confirmLargePush": false,
+    "skewWarnMs": 5000,
+    "skewHoldMs": 60000
+  },
+  "extraEnv": {}
+}

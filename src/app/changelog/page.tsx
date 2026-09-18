@@ -112,6 +112,8 @@ export default async function ChangelogPage() {
   const settings = await getSettings(owner.id);
   const authorName = effectiveDisplayName(settings, owner.email);
   const fmts = dayFmts(settings.timezone ?? DEFAULT_TIMEZONE);
+  // Reads need no token (public repo), so this is only false if the env is
+  // deliberately emptied; the NotConfigured card stays for that case.
   const configured = getGithubConfig() !== null;
   let entries: ChangelogEntry[] = [];
   let loadError: string | null = null;

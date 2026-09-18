@@ -12,7 +12,8 @@
 // preserved, headings
 // shifted under the title's <h1>). This module owns only the document shell and
 // its styles.
-import { BLOCKNOTE_COLORS } from "@/lib/colors";
+import { accentHighlightLiteral, BLOCKNOTE_COLORS, LIGHT_TEXT_COLORS } from "@/lib/colors";
+import { THEME_LABELS, THEMES, type Theme } from "@/lib/settings";
 import { bodyMarkdown, isItemBody } from "@/lib/body";
 import { CHART_CSS } from "@/lib/chordpro/chart-css";
 import { chordProToHtml } from "@/lib/chordpro/render";
@@ -65,7 +66,7 @@ const CMT_CSS = `
 .cmt{text-decoration:underline;text-decoration-color:${BLOCKNOTE_COLORS.yellow.text};
   text-decoration-thickness:2px;text-underline-offset:3px}
 .cmt-point{display:none}
-.cmt-note{font-style:italic;color:#a3a3a3;margin-left:.25em}
+.cmt-note{font-style:italic;color:var(--muted);margin-left:.25em}
 .cmt-note::before{content:"["}
 .cmt-note::after{content:"]"}`;
 
@@ -85,10 +86,37 @@ ins.slide{text-decoration:none;padding:0 .375rem;
   border-right:3px solid ${BLOCKNOTE_COLORS.blue.text};
   background:rgba(96,165,250,0.08)}`;
 
+// The document's four looks (settings.ts THEMES), as one variable set each. The
+// data-theme on <html> picks one; the Appearance control on the page switches it
+// and remembers the choice in the reader's browser. Values shadow the app's
+// globals.css palettes, on the document's own darker/paper-ish grounds.
+const THEME_VARS: Record<Theme, string> = {
+  dark: `color-scheme:dark;--bg:#0a0a0a;--fg:#e5e5e5;--muted:#a3a3a3;--faint:#737373;
+  --rule:#404040;--code:#171717;--code-line:#262626;--link:#7cb3ff;--btn:#262626`,
+  gray: `color-scheme:dark;--bg:#2b2b2b;--fg:#e6e6e6;--muted:#b0b0b0;--faint:#8a8a8a;
+  --rule:#4a4a4a;--code:#333333;--code-line:#3e3e3e;--link:#8ec0ff;--btn:#3d3d3d`,
+  light: `color-scheme:light;--bg:#ffffff;--fg:#1f1f1f;--muted:#555555;--faint:#777777;
+  --rule:#cccccc;--code:#f5f5f5;--code-line:#e5e5e5;--link:#1a4d8f;--btn:#f0f0f0`,
+  sepia: `color-scheme:light;--bg:#f4ecd8;--fg:#3b2f1e;--muted:#6b5a3e;--faint:#8c7b5e;
+  --rule:#cdbf9f;--code:#ede3cc;--code-line:#e0d5bd;--link:#6b4c1e;--btn:#e5dac0`,
+};
+const THEME_CSS = THEMES.map((t) => `html${t === "dark" ? "" : `[data-theme="${t}"]`}{${THEME_VARS[t]}}`).join("\n");
+
+// Text colors on the light looks: the body stores the bright dark-canvas hex
+// inline, so a light page repaints each by attribute match (same posture as
+// globals.css; `!important` because inline style beats any selector).
+const LIGHT_TEXT_CSS = (Object.keys(BLOCKNOTE_COLORS) as (keyof typeof BLOCKNOTE_COLORS)[])
+  .map(
+    (c) =>
+      `html[data-theme="light"] span[style*="color:${BLOCKNOTE_COLORS[c].text}"],html[data-theme="sepia"] span[style*="color:${BLOCKNOTE_COLORS[c].text}"]{color:${LIGHT_TEXT_COLORS[c]}!important}`
+  )
+  .join("\n");
+
 const DOC_CSS = `
-:root{color-scheme:dark}
+${THEME_CSS}
+${LIGHT_TEXT_CSS}
 *{box-sizing:border-box;margin:0}
-body{background:#0a0a0a;color:#e5e5e5;font:17px/1.65 Georgia,'Times New Roman',serif;
+body{background:var(--bg);color:var(--fg);font:17px/1.65 Georgia,'Times New Roman',serif;
   max-width:46rem;margin:0 auto;padding:3rem 1.5rem 6rem}
 h1{font-size:1.9rem;line-height:1.25;margin-bottom:1.5rem}
 h2,h3,h4,h5,h6{margin:1.6em 0 .5em;line-height:1.3}
@@ -99,42 +127,40 @@ li>ul,li>ol{margin-bottom:0}
 ul.contains-task-list{list-style:none;padding-left:.2em}
 ul.contains-task-list li{margin-bottom:.2em}
 li.task-list-item input{margin-right:.2em}
-blockquote{border-left:3px solid #525252;padding-left:1em;color:#a3a3a3}
-pre{background:#171717;border:1px solid #262626;border-radius:6px;
+blockquote{border-left:3px solid var(--rule);padding-left:1em;color:var(--muted)}
+pre{background:var(--code);border:1px solid var(--code-line);border-radius:6px;
   padding:.75em 1em;overflow-x:auto;font-size:.85em}
 code{font-family:ui-monospace,Consolas,monospace;font-size:.9em}
-p code,li code{background:#171717;border-radius:3px;padding:.1em .3em}
-a{color:#7cb3ff}
-.mention{color:#7cb3ff;font-weight:600;text-decoration:none}
+p code,li code{background:var(--code);border-radius:3px;padding:.1em .3em}
+a{color:var(--link)}
+.mention{color:var(--link);font-weight:600;text-decoration:none}
 .mention .mention-icon{width:1em;height:1em;vertical-align:-0.15em;margin-right:.12em}
-.mention--missing{color:#737373;font-weight:400}
-hr{border:none;border-top:1px solid #404040;margin:1.5em 0}
+.mention--missing{color:var(--faint);font-weight:400}
+hr{border:none;border-top:1px solid var(--rule);margin:1.5em 0}
 img{max-width:100%;height:auto;border-radius:4px}
 table{border-collapse:collapse;width:100%}
-td,th{border:1px solid #404040;padding:.35em .6em;vertical-align:top}
-th{text-align:left;font-weight:600;background:#171717}
-.doc-footer{margin-top:3rem;padding-top:1rem;border-top:1px solid #262626;
-  font:13px system-ui,sans-serif;color:#737373}
-.print-bar{position:fixed;top:.75rem;right:.75rem}
-.print-bar button{background:#262626;color:#e5e5e5;border:1px solid #404040;
-  border-radius:6px;padding:.4rem .9rem;font:13px system-ui,sans-serif;cursor:pointer}
+td,th{border:1px solid var(--rule);padding:.35em .6em;vertical-align:top}
+th{text-align:left;font-weight:600;background:var(--code)}
+.doc-footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--code-line);
+  font:13px system-ui,sans-serif;color:var(--faint)}
+.print-bar{position:fixed;top:.75rem;right:.75rem;display:flex;gap:.5rem;align-items:center;
+  font:13px system-ui,sans-serif}
+.print-bar button,.print-bar select{background:var(--btn);color:var(--fg);border:1px solid var(--rule);
+  border-radius:6px;padding:.4rem .9rem;font:inherit;cursor:pointer}
+.print-bar label{display:flex;align-items:center;gap:.4rem;background:var(--btn);color:var(--fg);
+  border:1px solid var(--rule);border-radius:6px;padding:0 0 0 .7rem}
+.print-bar label select{border:0;border-left:1px solid var(--rule);border-radius:0 6px 6px 0;padding:.4rem .6rem}
 ${HL_CSS}
 ${CMT_CSS}
 ${SLIDE_CSS}
 @page{size:letter;margin:0.5in}
 @media print{
-  :root{color-scheme:light}
-  body{background:#fff;color:#111;max-width:none;padding:0;font-size:12pt}
-  blockquote{border-color:#999;color:#444}
+  html{color-scheme:light;--fg:#111;--muted:#444;--faint:#666;--rule:#999;--code:#f5f5f5;--code-line:#ddd;--link:#1a4d8f}
+  body{background:#fff;max-width:none;padding:0;font-size:12pt}
   .cmt{text-decoration-color:#999}
   ins.slide{border-left-color:#666;border-right-color:#666;background:transparent}
   .cmt-note{border-left-color:#999;color:#444}
-  pre{background:#f5f5f5;border-color:#ddd}
-  p code,li code{background:#f5f5f5}
-  a,.mention{color:#1a4d8f;text-decoration:none}
-  .mention--missing{color:#666}
-  hr{border-color:#ccc}
-  td,th{border-color:#999}
+  a,.mention{text-decoration:none}
   th{background:transparent}
   .doc-footer{display:none}
   .print-bar{display:none}
@@ -158,9 +184,32 @@ export function renderPrintDocument(
     // to self. The owner opts in per render (`?comments=1`); a share link cannot
     // opt in at all yet.
     comments?: boolean;
+    // The owner's accent, as a solid hex (settings.highlightColor). Present so
+    // the accent highlight ("My highlight", colors.ts) survives into THIS
+    // document: in the app it renders from a live `var(--accent)` reference,
+    // and this page deliberately carries no app context, so the reference has
+    // nothing to resolve against. Resolving it server-side to a literal rgba()
+    // is what keeps the offline/PDF copy faithful (Principle 4, Sunday-proof).
+    // Omitted, the mark falls back to the UA's default highlight — still
+    // visibly highlighted, just not in the owner's color.
+    accent?: string;
+    // The look the page opens in (settings.ts THEMES). Dark when omitted. The
+    // reader can switch it from the page's Appearance control, which remembers
+    // the choice in their browser (localStorage) for every Ledgr document.
+    theme?: Theme;
   } = {}
 ): string {
+  const theme: Theme = opts.theme ?? "dark";
+  const themeOptions = THEMES.map(
+    (t) => `<option value="${t}"${t === theme ? " selected" : ""}>${THEME_LABELS[t]}</option>`
+  ).join("");
   const safeTitle = escapeHtml(title || "Untitled");
+  // Appended after DOC_CSS so it sits in the same cascade as the nine literal
+  // hl-* rules. `color:inherit` for the same load-bearing reason they have it:
+  // a highlight owns the fill channel and must not repaint colored text black.
+  const accentHl = opts.accent
+    ? `mark.hl-accent{background-color:${accentHighlightLiteral(opts.accent)};color:inherit}`
+    : "";
   const footer = opts.footerHtml ? `<div class="doc-footer">${opts.footerHtml}</div>` : "";
   // A chordpro body renders as a chord chart whose own header carries the title,
   // key/capo/tempo/time line — so the outer <h1> is suppressed for it. Every
@@ -176,18 +225,19 @@ export function renderPrintDocument(
         comments: opts.comments === true,
       });
   return `<!doctype html>
-<html lang="en">
+<html lang="en"${theme === "dark" ? "" : ` data-theme="${theme}"`}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${safeTitle}</title>
-<style>${DOC_CSS}</style>
+<style>${DOC_CSS}${accentHl}</style>
 </head>
 <body>
-<div class="print-bar"><button onclick="window.print()">Print / PDF</button></div>
+<div class="print-bar"><label for="theme-pick">Appearance<select id="theme-pick" aria-label="Page appearance">${themeOptions}</select></label><button onclick="window.print()">Print / PDF</button></div>
 ${heading}
 ${bodyHtml}
 ${footer}
+<script>(function(){var k="ledgr-doc-theme",h=document.documentElement,s=document.getElementById("theme-pick"),ok=${JSON.stringify(THEMES)};function set(v){if(v==="dark")delete h.dataset.theme;else h.dataset.theme=v;s.value=v}try{var v=localStorage.getItem(k);if(ok.indexOf(v)>=0)set(v)}catch(e){}s.onchange=function(){set(s.value);try{localStorage.setItem(k,s.value)}catch(e){}}})()</script>
 </body>
 </html>`;
 }

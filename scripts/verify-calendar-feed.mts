@@ -18,6 +18,7 @@ const { calendarEvents, items, jobState, users } = await import("../src/db/schem
 const { runCalendarSync, CALENDAR_JOB_KEY } = await import("../src/lib/calendar/sync");
 const { listCalendarFeed, promoteCalendarEvent } = await import("../src/lib/calendar/feed");
 const { ItemError } = await import("../src/lib/items");
+const { callTool } = await import("../src/lib/mcp/tools");
 type CalendarEvent = import("../src/lib/calendar/types").CalendarEvent;
 type CalendarSource = import("../src/lib/calendar/types").CalendarSource;
 const { and, eq } = await import("drizzle-orm");
@@ -85,6 +86,12 @@ try {
     ev({ id: "feed-cancelled", title: "Cancelled thing", startUtc: future(4), isCancelled: true }),
     ev({ id: "feed-past", title: "Old event", startUtc: pastDay(1) }),
     ev({ id: "feed-pre", title: "Pre-existing", startUtc: future(5) }),
+    ev({ id: "feed-far", title: "Three weeks out", startUtc: future(20) }),
+    ev({ id: "feed-beyond", title: "Five weeks out", startUtc: future(35) }),
+    // The MCP tools read the clock, not this script's frozen `now`, so their
+    // fixture is dated from real time. Still outside every frozen-now window
+    // above, so the feed assertions there are unaffected.
+    ev({ id: "feed-mcp", title: "MCP fixture", startUtc: new Date(Date.now() + 20 * 86400_000) }),
   ];
   // Simulate the matcher: only titles containing MATCH auto-promote.
   const run = await runCalendarSync(ownerId, stub, {
@@ -92,7 +99,7 @@ try {
   });
 
   check("only the matched event auto-promotes", run.promoted === 1, JSON.stringify(run));
-  check("the four un-matched, un-promoted events are cached", run.cached === 4, JSON.stringify(run));
+  check("the un-matched, un-promoted events are cached", run.cached === 7, JSON.stringify(run));
   check("matched event became an item", (await itemByEvent(ownerId, "feed-match")).length === 1);
   check(
     "un-matched events did NOT become items",
@@ -119,6 +126,37 @@ try {
   // Idempotent: re-adding returns the same item, makes no duplicate.
   const again = await promoteCalendarEvent(ownerId, feedAdd.id);
   check("re-promote is idempotent (same item, alreadyPromoted)", again.alreadyPromoted === true && again.itemId === added.itemId && (await itemByEvent(ownerId, "feed-add")).length === 1);
+
+  // The MCP window (add_calendar_event's reach): the default feed stops at 14
+  // days, `days` widens it as far as the cache holds, and asking for more is
+  // clamped rather than reaching past DEFAULT_WINDOW_DAYS into nothing.
+  const wide = (await listCalendarFeed(ownerId, { now, windowDays: 28 })).map((f) => f.msEventId);
+  check("default feed window excludes an event 20 days out", !feed2.some((f) => f.msEventId === "feed-far"));
+  check("days=28 reaches the 20-day event", wide.includes("feed-far"), wide.join(","));
+  const clamped = (await listCalendarFeed(ownerId, { now, windowDays: 999 })).map((f) => f.msEventId);
+  check("an over-large window clamps to the cache horizon", !clamped.includes("feed-beyond"), clamped.join(","));
+
+  // The MCP tools (ADR-183 additive surface): add_calendar_event must write the
+  // SAME row the UI's Add writes — ms_event_id (the sync's match key) and the
+  // calendar payload — or a later sync creates a duplicate instead of merging.
+  const listed = JSON.parse((await callTool(ownerId, "list_calendar_feed", { days: 28 })).content[0].text);
+  const farRow = listed.events.find((e: { msEventId: string }) => e.msEventId === "feed-mcp");
+  check("list_calendar_feed is registered and returns the feed", Boolean(farRow) && listed.count === listed.events.length);
+  const addRes = await callTool(ownerId, "add_calendar_event", { id: farRow.id });
+  check("add_calendar_event succeeds", addRes.isError !== true, addRes.content[0].text.slice(0, 120));
+  const addedFar = JSON.parse(addRes.content[0].text);
+  const [farItem] = await itemByEvent(ownerId, "feed-mcp");
+  check("the tool wrote ms_event_id (the sync match key)", Boolean(farItem) && farItem.id === addedFar.id);
+  check("the tool wrote properties.calendar", Boolean((farItem?.properties as { calendar?: unknown })?.calendar));
+  check("the tool set meetingAt from the event start", Math.abs((farItem?.meetingAt?.getTime() ?? 0) - (Date.now() + 20 * 86400_000)) < 60_000);
+  check("the first add reports alreadyAdded false", addedFar.alreadyAdded === false);
+  const addAgain = JSON.parse((await callTool(ownerId, "add_calendar_event", { id: farRow.id })).content[0].text);
+  check(
+    "add_calendar_event is idempotent (same item, no duplicate)",
+    addAgain.id === addedFar.id && addAgain.alreadyAdded === true && (await itemByEvent(ownerId, "feed-mcp")).length === 1
+  );
+  const badAdd = await callTool(ownerId, "add_calendar_event", { id: "not-a-uuid" });
+  check("add_calendar_event rejects a non-uuid id cleanly", badAdd.isError === true);
 
   // Owner scoping: another owner can't promote our cache row, nor see our feed.
   const [other] = await db

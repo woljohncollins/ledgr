@@ -35,6 +35,11 @@ export type LauncherTile = {
   href: string;
   icon: string;
   count?: number | null;
+  // An overlay tile (ADR-182): Search in "palette" mode opens the command
+  // palette rather than navigating, so the drawer tile must do what the bar slot
+  // does. `href` still identifies the tile (it's the React key and the
+  // already-in-the-bar filter), it just isn't followed.
+  onSelect?: () => void;
 };
 
 // Pre-hydration fallback for the closed offset: the SSR frame can't know the
@@ -270,13 +275,11 @@ export default function Launcher({
         >
           <div className="ui-section-label px-4 pb-1 pt-1">Go to</div>
           <div className="grid grid-cols-5 gap-1 px-2 pb-[calc(0.75rem+env(safe-area-inset-bottom))]">
-            {tiles.map((t) => (
-                <Link
-                  key={t.href}
-                  href={t.href}
-                  onClick={() => onOpenChange(false)}
-                  className="relative flex flex-col items-center gap-1.5 rounded-card px-0.5 py-2.5 text-ink-muted hover:bg-surface-2 hover:text-ink"
-                >
+            {tiles.map((t) => {
+              const tileClass =
+                "relative flex flex-col items-center gap-1.5 rounded-card px-0.5 py-2.5 text-ink-muted hover:bg-surface-2 hover:text-ink";
+              const body = (
+                <>
                   <span className="relative inline-flex">
                     <Icon icon={t.icon} />
                     {t.count != null && t.count > 0 && (
@@ -289,8 +292,33 @@ export default function Launcher({
                     )}
                   </span>
                   <span className="w-full truncate text-center text-[10px]">{t.label}</span>
+                </>
+              );
+              // A tile that opens an overlay closes the drawer first, so the
+              // overlay isn't stacked behind it (same order the bar slot uses).
+              return t.onSelect ? (
+                <button
+                  key={t.href}
+                  type="button"
+                  onClick={() => {
+                    onOpenChange(false);
+                    t.onSelect!();
+                  }}
+                  className={tileClass}
+                >
+                  {body}
+                </button>
+              ) : (
+                <Link
+                  key={t.href}
+                  href={t.href}
+                  onClick={() => onOpenChange(false)}
+                  className={tileClass}
+                >
+                  {body}
                 </Link>
-            ))}
+              );
+            })}
           </div>
         </div>
       </div>

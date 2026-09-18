@@ -24,6 +24,29 @@ export function formatDayLabel(
   return `${wd}${MONTHS[m - 1]} ${d}${yr}`;
 }
 
+// How (and whether) to print a deadline beside a plan date on a list row
+// (ADR-253). Rows used to print both unconditionally, which is how "Sep 11 · due
+// Aug 28" sat on screen for weeks reading as normal. One rule, shared by every
+// row that shows a task's dates, so they can't drift apart:
+//
+//   - no deadline, or a deadline on the SAME day as the plan → show nothing;
+//     the plan date already says it, and a duplicate is pure noise
+//   - a deadline before the plan day, or already past → show it, alerting
+//   - a deadline genuinely later than the plan → show it, quietly; that is real
+//     information the owner asked to keep ("work it Monday, it's due Friday")
+export function deadlineDisplay(
+  due: string | null | undefined,
+  scheduled: string | null | undefined,
+  today: string | null | undefined
+): { label: string; alert: boolean } | null {
+  const label = formatDayLabel(due);
+  if (!due || !label) return null;
+  const d = due.slice(0, 10);
+  const s = scheduled?.slice(0, 10);
+  if (s && d === s) return null;
+  return { label, alert: (!!s && d < s) || isOverdueYmd(due, today) };
+}
+
 // True when `value`'s calendar day is strictly before `today`. Both are read as
 // their date part only (ISO instant or YYYY-MM-DD); ISO 8601 date strings sort
 // lexically the same as chronologically, so a plain string compare is correct

@@ -23,7 +23,12 @@ export async function GET() {
     return NextResponse.json({
       types: types.map((t) => ({ key: t.key, label: t.label, icon: t.icon })),
       views: views.map((v) => ({ id: v.id, name: v.name })),
-      templates: templates.map((t) => ({ id: t.id, name: t.name, type: t.type })),
+      templates: templates.map((t) => ({
+        id: t.id,
+        name: t.name,
+        type: t.type,
+        prototypeItemId: t.prototypeItemId,
+      })),
     });
   } catch (err) {
     return errorResponse(err);

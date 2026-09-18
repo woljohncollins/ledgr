@@ -27,7 +27,15 @@ export type Lens =
   | { id: string; kind: "sort"; label: string; source: LensSortSource; dir: "asc" | "desc" }
   | { id: string; kind: "view"; label: string; viewId: string }
   | { id: string; kind: "calendar"; label: string }
-  | { id: string; kind: "timeline"; label: string };
+  | { id: string; kind: "timeline"; label: string }
+  // The status kanban of a type (Tyler, 2026-08-25) and its completed-work
+  // archive. Both are SYNTHETIC view lenses: they render through ViewRenderer
+  // like a "view" lens, but over a view definition built on the fly from the
+  // type (see resolveSyntheticLens in view-render.ts) rather than a saved view.
+  // That's what lets a type ship a board as its DEFAULT tab — a "view" lens
+  // needs a stored view id, which a fresh instance doesn't have.
+  | { id: string; kind: "board"; label: string }
+  | { id: string; kind: "completed"; label: string };
 
 // Built-in sort fields a lens can use. A subset of the view engine's columns
 // plus "mostLinked" (the confirmed-relation count). Date/scheduled/meeting
@@ -60,6 +68,19 @@ export function defaultLenses(typeKey?: string): Lens[] {
     { id: "az", kind: "sort", label: "A → Z", source: { field: "title" }, dir: "asc" },
     { id: "linked", kind: "sort", label: "Most linked", source: { field: "mostLinked" }, dir: "desc" },
   ];
+  // A type with real multi-stage statuses leads with its BOARD (Tyler,
+  // 2026-08-25): for projects the kanban is the primary way the work is read,
+  // not a tab you go find. "Completed" closes the strip — the searchable archive
+  // of finished work, which is what lets the board's Done column stay collapsed
+  // without anything becoming unreachable. Both are reorderable/removable in
+  // Build like any other tab, and this only sets the DEFAULT strip.
+  if (typeKey === "project") {
+    return [
+      { id: "board", kind: "board", label: "Board" },
+      ...generic,
+      { id: "completed", kind: "completed", label: "Completed" },
+    ];
+  }
   if (typeKey === "event") {
     return [
       { id: "calendar", kind: "calendar", label: "Calendar" },
@@ -163,9 +184,11 @@ function parseLens(raw: unknown): Lens | null {
     return { id, kind: "view", label, viewId };
   }
 
-  // Bespoke bodies (event-only): id + label, no source.
+  // Bespoke bodies: id + label, no source.
   if (r.kind === "calendar") return { id, kind: "calendar", label };
   if (r.kind === "timeline") return { id, kind: "timeline", label };
+  if (r.kind === "board") return { id, kind: "board", label };
+  if (r.kind === "completed") return { id, kind: "completed", label };
 
   // Default kind is "sort".
   const dir: "asc" | "desc" = r.dir === "asc" ? "asc" : "desc";

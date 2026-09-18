@@ -16,6 +16,7 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { openItem } from "@/lib/item-nav";
 import { addDaysYmd } from "@/lib/recurrence";
 import UnscheduledRail from "@/components/planner/UnscheduledRail";
 import CompleteButton from "@/components/planner/CompleteButton";
@@ -285,9 +286,9 @@ export default function PlannerMonth({
           setDragId(null);
           setOverDay(null);
         } : undefined}
-        onClick={() => router.push(`/items/${item.id}`)}
+        onClick={() => openItem(router, item.id)}
         onKeyDown={(e) => {
-          if (e.key === "Enter") router.push(`/items/${item.id}`);
+          if (e.key === "Enter") openItem(router, item.id);
         }}
         className={`group flex touch-none select-none items-center gap-1 rounded px-1 py-0.5 text-[11px] ${canMove ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${done ? "text-neutral-500 line-through" : "text-neutral-300"} ${lifted ? "opacity-40" : ""}`}
         style={{

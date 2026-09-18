@@ -1,0 +1,116 @@
+# Is the local hub reachable from the outside world? (2026-09-02)
+#
+# WHY THIS EXISTS. Ledgr's local hub is a laptop published to the internet
+# through a Tailscale Funnel address, and "it's flaky" was the only evidence we
+# had: no record of when it was unreachable, for how long, or how slow it was.
+# Both AI clients and phones were reporting failures nobody could reproduce
+# afterwards. This turns that into a green/red grid in the Actions tab (the
+# uptime record) and emails the owner when a probe fails.
+#
+# WHAT IT CANNOT SEE, stated plainly so nobody over-trusts it. GitHub's minimum
+# schedule is five minutes and its scheduled runs are delayed under load, so
+# this samples every ~15 minutes. Windows logged seven Wi-Fi drops in a week,
+# each about 45 seconds; a 15-minute sample has roughly a 1-in-20 chance of
+# landing inside one. So this instrument measures SUSTAINED outages (a reboot,
+# a machine left asleep, Tailscale's Funnel failing to come back after the node
+# was offline a while), not brief network blips. The blip record already
+# exists for free on the machine itself, in the Windows WLAN event log
+# (`Get-WinEvent -LogName Microsoft-Windows-WLAN-AutoConfig/Operational`).
+#
+# WHY /health AND NO TOKEN. `/health` is public and cheap, and this asks a
+# transport question ("can the outside world reach this machine right now"),
+# not an application one. The weekly `health-check.yml` is the application
+# question, on the authenticated endpoint, and the two do not overlap.
+#
+# PER-INSTANCE, AND THIS REPO IS SHARED. Brandon and Tyler build from one repo,
+# so this probes only what the `LEDGR_HUB_URL` repo variable names and does
+# nothing at all when it is unset. Set it to a hub's public origin with no
+# trailing slash, e.g. https://ledgr.brasco.fyi (Brandon's hub moved from its
+# Tailscale Funnel address to a Cloudflare Tunnel on 2026-09-13). Point it at a
+# cloud deployment and it would report that instead, which is not the intent.
+name: hub-reachable
+
+on:
+  schedule:
+    # Deliberately off the hour: GitHub sheds scheduled load at :00.
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One probe at a time. A queued backlog would report stale minutes as if they
+# were current, which is worse than a missing sample.
+concurrency:
+  group: hub-reachable
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe the hub's public address
+        env:
+          HUB_URL: ${{ vars.LEDGR_HUB_URL }}
+        run: |
+          if [ -z "$HUB_URL" ]; then
+            echo "LEDGR_HUB_URL is not set, so there is no hub to probe." \
+              >> "$GITHUB_STEP_SUMMARY"
+            echo "Set it to a hub's public origin to start recording uptime." \
+              >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Tolerate a trailing slash: this variable is typed by a person, and
+          # "https://host/" would otherwise probe "//health".
+          HUB_URL="${HUB_URL%/}"
+
+          # Three attempts, ten seconds apart, before calling it down. One
+          # failed request proves nothing: the runner's own network, a DERP
+          # relay hiccup, or a TLS handshake lost to a passing blip would all
+          # produce a false red, and a monitor that cries wolf gets ignored.
+          # Only a hub that is unreachable across ~20 seconds is reported down.
+          for attempt in 1 2 3; do
+            read -r code total connect tls <<<"$(
+              curl -sS -o /dev/null --max-time 25 \
+                -w '%{http_code} %{time_total} %{time_connect} %{time_appconnect}' \
+                "$HUB_URL/health" 2>/dev/null || echo '000 0 0 0'
+            )"
+            echo "attempt $attempt: http=$code total=${total}s connect=${connect}s tls=${tls}s"
+            if [ "$code" = "200" ]; then
+              {
+                echo "### ✅ Hub reachable"
+                echo ""
+                echo "| | |"
+                echo "|---|---|"
+                echo "| Address | \`$HUB_URL\` |"
+                echo "| Response | HTTP 200 |"
+                echo "| Round trip | ${total}s (connect ${connect}s, TLS ${tls}s) |"
+                echo "| Attempts needed | $attempt of 3 |"
+              } >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+            [ "$attempt" = 3 ] || sleep 10
+          done
+
+          # `000` is curl reporting it never got an answer (down, or the tunnel
+          # is not carrying traffic). Any other code means something answered
+          # and the machine is up, so the app or the reverse proxy is the fault.
+          {
+            echo "### ❌ Hub unreachable"
+            echo ""
+            echo "Three attempts over ~20 seconds all failed."
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Address | \`$HUB_URL\` |"
+            echo "| Last result | \`$code\` |"
+            if [ "$code" = "000" ]; then
+              echo "| Reading | Nothing answered: machine off or asleep, network down, or the Funnel is not carrying traffic. |"
+            else
+              echo "| Reading | Something answered, so the machine is up and the app or proxy is at fault. |"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "::error::hub unreachable at $HUB_URL (last result $code)"
+          exit 1

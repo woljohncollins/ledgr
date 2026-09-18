@@ -9,10 +9,14 @@
 
 import { useEffect, useState } from "react";
 import {
+  DAY_OF_MONTH_TOKEN,
   MULTI_OPS,
   NO_VALUE_OPS,
+  TODAY_TOKEN,
+  isRelativeToken,
   opLabel,
   opsForKind,
+  relativeTokenLabel,
   type WhereCondition,
   type WhereGroup,
   type WhereOp,
@@ -208,9 +212,21 @@ function ConditionValue({
     }
     // select / multi_select property
     const opts = (option?.subject === "property" ? option.options : undefined) ?? [];
+    // A day-of-month field (every option is 1..31) also offers the relative
+    // token, so "the entry for today" is pickable rather than a value the owner
+    // has to retype each morning.
+    // ponytail: the shape of the options is the only hint a field is calendar
+    // days; give the property kind a flag if a second such field ever appears.
+    const isDayField =
+      opts.length > 0 && opts.every((o) => /^\d{1,2}$/.test(o) && +o >= 1 && +o <= 31);
     return (
       <OptionMultiPick
-        options={opts.map((o) => ({ value: o, label: o }))}
+        options={[
+          ...(isDayField
+            ? [{ value: DAY_OF_MONTH_TOKEN, label: relativeTokenLabel(DAY_OF_MONTH_TOKEN) }]
+            : []),
+          ...opts.map((o) => ({ value: o, label: o })),
+        ]}
         selected={values}
         onChange={(v) => onChange({ values: v })}
       />
@@ -218,15 +234,45 @@ function ConditionValue({
   }
 
   // Single-value ops (contains/eq/neq/gt/lt/gte/lte) — text/number/date input.
+  // A number or date field can hold a relative token instead of a literal; the
+  // token has no place in a number/date input, so it shows as a chip you clear.
+  const token = kind === "number" ? DAY_OF_MONTH_TOKEN : kind === "date" ? TODAY_TOKEN : null;
+  if (isRelativeToken(cond.value)) {
+    return (
+      <span className="flex min-w-0 flex-1 items-center gap-2">
+        <span className="rounded-card border border-line bg-surface-2 px-2 py-1 text-sm text-ink">
+          {relativeTokenLabel(cond.value as string)}
+        </span>
+        <button
+          type="button"
+          onClick={() => onChange({ value: "" })}
+          className="text-xs text-ink-subtle underline decoration-dotted underline-offset-2"
+        >
+          clear
+        </button>
+      </span>
+    );
+  }
   const type = kind === "number" ? "number" : kind === "date" ? "date" : "text";
   return (
-    <input
-      type={type}
-      value={cond.value ?? ""}
-      onChange={(e) => onChange({ value: e.target.value })}
-      placeholder="value"
-      className={`${inputClass} min-w-0 flex-1`}
-    />
+    <span className="flex min-w-0 flex-1 items-center gap-2">
+      <input
+        type={type}
+        value={cond.value ?? ""}
+        onChange={(e) => onChange({ value: e.target.value })}
+        placeholder="value"
+        className={`${inputClass} min-w-0 flex-1`}
+      />
+      {token && (
+        <button
+          type="button"
+          onClick={() => onChange({ value: token })}
+          className="whitespace-nowrap text-xs text-ink-subtle underline decoration-dotted underline-offset-2"
+        >
+          {relativeTokenLabel(token)}
+        </button>
+      )}
+    </span>
   );
 }
 

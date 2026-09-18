@@ -38,15 +38,22 @@ export default async function ListTabs({ active }: { active: ListTabKey }) {
   const systemTabs = SYSTEM_TABS.filter(
     (t) => visible.has(t.typeKey) || t.key === active
   );
-  // Custom tabs are every other type. Exclude any type a SYSTEM_TAB already
-  // covers, so it can't render twice (a system tab plus a custom one) and
-  // collide on a duplicate React key. `!isSystem` covers the five base types
-  // (person included, once ADR-070's corrective migration has run), but keep the
-  // explicit key guard as a backstop: a SYSTEM_TAB type that somehow isn't
-  // flagged is_system would otherwise leak into the custom list.
-  const systemTypeKeys = new Set(SYSTEM_TABS.map((t) => t.typeKey));
+  // Every other visible type gets a generic tab. This used to filter on
+  // `!isSystem`, but `project` and `tag` are built-in now (migration 0052) and
+  // must keep their tabs, so the rule is by KEY: exclude the types a SYSTEM_TAB
+  // already covers (so nothing renders twice / collides on a duplicate React
+  // key) and the utility child types that never deserve a top-level tab
+  // (transcript is visible-but-contained; milestone/unmarked/memory are already
+  // dropped by the hidden filter above, listed here as a backstop).
+  const systemTypeKeys = new Set([
+    ...SYSTEM_TABS.map((t) => t.typeKey),
+    "transcript",
+    "milestone",
+    "unmarked",
+    "memory",
+  ]);
   const custom = rows
-    .filter((r) => !r.isSystem && !systemTypeKeys.has(r.key))
+    .filter((r) => !systemTypeKeys.has(r.key))
     .sort((a, b) => a.label.localeCompare(b.label))
     .map((c) => ({ key: c.key, label: c.label, href: `/list/${c.key}` }));
 

@@ -80,28 +80,46 @@ export const V1_GOALS: GoalSet[] = [
   {
     person: "Tyler",
     bar: "Replace Todoist + Apple Notes, and be my creative + dev workspace.",
+    // Statuses re-called by Tyler from live daily use, 2026-08-20: tasks and
+    // projects are "ready to go for my use" (polish continues — ADR-202/204/205
+    // rounds), notes is ready, Papers was previously marked done but needs more
+    // work, Songs still needs work, and Sermons counts as partially complete
+    // because Brandon built a version of the sermons module.
     goals: [
       {
         label: "Native tasks cover my Todoist usage",
-        status: "in_progress",
-        note: "engine done; gaps resolved in design (labels → built-in proposal, projects → a project hub) — left to validate against my real workflow",
+        status: "done",
+        note: "covering the real workflow in daily use; polish rounds ongoing (tasks-row redesign ADR-202, subtask fold ADR-205)",
       },
       {
         label: "Notes replace Apple Notes (one type, relations)",
-        status: "in_progress",
-        note: "note type + relations model exist (ADR-061); set up the saved-view lenses",
+        status: "done",
+        note: "ready to go (Tyler, 2026-08-20)",
       },
-      { label: "Papers module", status: "done", note: "ADR-048" },
+      {
+        label: "Papers module",
+        status: "in_progress",
+        note: "shipped in ADR-048 and previously marked done; pulled back — needs more work (Tyler, 2026-08-20)",
+      },
       {
         label: "Finish Songs module (author songs in Ledgr)",
         status: "in_progress",
-        note: "chord canvas exists; song-import spec'd",
+        note: "chord canvas exists; song-import spec'd; needs more work (Tyler, 2026-08-20)",
       },
-      { label: "Sermons bespoke type (+ upload existing)", status: "todo" },
+      {
+        label: "Sermons bespoke type (+ upload existing)",
+        status: "in_progress",
+        note: "partially complete — Brandon built a version of the sermons module",
+      },
       {
         label: "Projects bespoke type (hub: tasks + notes/files/meetings)",
-        status: "in_progress",
-        note: "widget-composed Project + Pursuit built (ADR-111, PJ1–PJ11) on a branch; awaiting integration onto main + in-browser pass",
+        status: "done",
+        note: "done though not perfect — ready for my use (Tyler, 2026-08-20; widget home + tools, ADR-199/200/204)",
+      },
+      {
+        label: "Item windows round: peek + full screen + arrange",
+        status: "todo",
+        note: "the parked window round (next_steps, 2026-08-17) plus its bugs: the vanishing mid-width field, peek click-through-to-underneath, customize-layout discoverability",
       },
     ],
   },

@@ -57,7 +57,8 @@ export default function AddExistingSubtask({ parentId }: { parentId: string }) {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="rounded px-2 py-1 text-sm text-neutral-600 hover:bg-neutral-800 hover:text-neutral-300"
+        // A step dimmer than "Add subtask" beside it — the secondary path.
+        className="rounded px-2 py-1 text-sm text-ink-muted hover:bg-surface-2 hover:text-ink"
       >
         Add existing task
       </button>

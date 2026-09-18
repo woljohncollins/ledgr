@@ -1,8 +1,26 @@
 <!doctype html>
-<!-- Offline fallback (slice 16). A static, fully self-contained file (no CSS
-     or JS chunks to also have cached) precached by sw.js and served when a
-     navigation fails. The PWA promises no offline writes (PRD §4.5): this
-     page just says so and points at the fallback paths. -->
+<!-- Offline fallback (slice 16), now also the offline landing page (ADR-193).
+     A static, fully self-contained file (no CSS or JS chunks to also have
+     cached) precached by sw.js and served when a navigation fails, including
+     the cold `/` open of the installed PWA.
+
+     It lists whatever Save Offline (PRD §4.7) has pinned on THIS device, so a
+     cold offline launch lands somewhere useful instead of a dead end. The list
+     is derived entirely from the ledgr-pin-v1 cache — no registry, no
+     localStorage, nothing that can drift from the pins it describes:
+       * which items  → cache.keys() filtered to /items/{id}/print, which also
+                        de-dupes the two-key-per-item shape and skips pinned
+                        images in the same pass
+       * titles       → the <title> the print renderer already writes
+       * order        → the Cache API's insertion order, reversed
+       * dates        → the Date header SaveOffline stamps on the pinned copy
+     Every link here is a hard navigation (a static page has no Next router),
+     so it lands on sw.js's `request.mode === "navigate"` branch, where the pin
+     fallback already lives. The service worker needed no change for this.
+
+     ⚠️ This file is precached into ledgr-shell-<VERSION> and served
+     cache-first. Editing it does NOTHING on an installed device until VERSION
+     is bumped in sw.js. -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
@@ -37,6 +55,22 @@
       }
       h1 { font-size: 1.25rem; margin: 0 0 0.5rem; color: #ededed; }
       p { margin: 0.25rem 0; color: #9b9b9b; font-size: 0.9rem; line-height: 1.5; }
+      ul {
+        list-style: none;
+        text-align: left;
+        margin: 1.25rem 0 1.1rem;
+        padding: 0;
+        border-top: 1px solid #2f2f2f;
+      }
+      li { border-bottom: 1px solid #2f2f2f; padding: 0.55rem 0.15rem; }
+      li a {
+        display: block;
+        color: #529cca;
+        text-decoration: none;
+        font-size: 0.9rem;
+      }
+      li a:hover { text-decoration: underline; }
+      li span { color: #6b6b6b; font-size: 0.73rem; }
       button {
         margin-top: 1.25rem;
         background: #529cca; color: #191919;
@@ -51,9 +85,99 @@
     <main>
       <span class="mark" aria-hidden="true"></span>
       <h1>You're offline</h1>
-      <p>Ledgr needs a connection to load your items.</p>
-      <p>Capture on the go lives in Todoist; Sunday's fallback is the OneDrive export.</p>
+      <p id="intro">Ledgr needs a connection to load your items.</p>
+      <ul id="pins" hidden></ul>
+      <p id="hint">Capture on the go lives in Todoist; Sunday's fallback is the OneDrive export.</p>
       <button onclick="location.reload()">Try again</button>
     </main>
+    <script>
+      // Inline on purpose: this page must render with nothing else cached, so it
+      // can never depend on a separate script fetch. There is no CSP on this
+      // origin (see next.config.ts), and the Try again button above is already
+      // an inline handler.
+      (function () {
+        var PIN_CACHE = "ledgr-pin-v1";
+        // One row per pinned item. The /print key is the canonical one; matching
+        // it alone drops the bare /items/{id} twin and every pinned image URL.
+        var PIN_KEY = /^\/items\/([^/]+)\/print$/;
+
+        // The Date header SaveOffline stamps on the pinned copy. A re-save
+        // cache.put()s over the same key with a fresh stamp, so this is always
+        // when the copy on this device was last written. Pins from before the
+        // header existed sort last (0) and show no date.
+        function savedAt(res) {
+          var d = new Date(res.headers.get("date") || "");
+          var t = d.getTime();
+          return isNaN(t) ? 0 : t;
+        }
+
+        async function render() {
+          if (!("caches" in window)) return;
+          var cache = await caches.open(PIN_CACHE);
+          var keys = await cache.keys();
+          var list = document.getElementById("pins");
+          var rows = [];
+
+          for (var i = 0; i < keys.length; i++) {
+            var match = new URL(keys[i].url).pathname.match(PIN_KEY);
+            if (!match) continue;
+            var res = await cache.match(keys[i]);
+            if (!res) continue;
+            var html = await res.text();
+            var titled = html.match(/<title>([^<]*)<\/title>/);
+            rows.push({
+              id: match[1],
+              // print-html.ts already HTML-escaped this, and the [^<]* capture
+              // guarantees no tags — see the innerHTML note below.
+              title: (titled && titled[1]) || "Untitled",
+              at: savedAt(res),
+            });
+          }
+
+          // Most recently saved first, sorted on the stamp itself. Cache key
+          // order happens to be insertion order today, but leaning on that
+          // would put the newest re-save in the wrong place the moment a
+          // browser stops guaranteeing it.
+          rows.sort(function (a, b) {
+            return b.at - a.at;
+          });
+
+          for (var j = 0; j < rows.length; j++) {
+            var li = document.createElement("li");
+            var a = document.createElement("a");
+            a.href = "/items/" + rows[j].id + "/print";
+            // innerHTML, deliberately: the title arrives already escaped, so
+            // assigning it as text would render "&amp;" literally.
+            a.innerHTML = rows[j].title;
+            li.appendChild(a);
+
+            if (rows[j].at) {
+              var meta = document.createElement("span");
+              meta.textContent =
+                "saved " +
+                new Date(rows[j].at).toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                });
+              li.appendChild(meta);
+            }
+            list.appendChild(li);
+          }
+
+          if (!rows.length) {
+            document.getElementById("intro").textContent =
+              "Nothing is saved on this device yet. Open an item with a connection and press Save Offline.";
+            return;
+          }
+          document.getElementById("intro").textContent =
+            "These are saved on this device and open with no connection.";
+          list.hidden = false;
+        }
+
+        // Any failure leaves the static copy above standing, which is exactly
+        // the page this file used to be.
+        render().catch(function () {});
+      })();
+    </script>
   </body>
 </html>

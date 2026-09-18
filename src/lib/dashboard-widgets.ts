@@ -300,6 +300,9 @@ export type WidgetData = {
   // one of those spurious columns would write a status the type never defined.
   groupOrder?: string[];
   propertyLabels?: Record<string, string>;
+  // Property kinds keyed the same way, so a table widget's phone/email column is
+  // dialable like the view page's (ADR-192).
+  propertyKinds?: Record<string, string>;
   // The type's resolved statuses, so a faithful board/list renders real status
   // chips instead of raw keys.
   statuses?: StatusDef[];

@@ -172,6 +172,65 @@ export async function childRollups(
   return map;
 }
 
+// A flat descendant task row — what the project timeline needs to count a
+// subtask's completion without assembling a tree.
+export type DescendantTask = {
+  id: string;
+  title: string;
+  statusCategory: StatusCategory;
+  properties: Record<string, unknown> | null;
+  updatedAt: Date;
+};
+
+// Every live TASK anywhere under a set of roots, in one recursive query — the
+// derived-membership read behind "a task on a project brings its subtasks along"
+// (Tyler, 2026-08-17). Membership is derived from parent_id at read time, never
+// written as relation edges: moving a subtask to another parent, or un-relating
+// the parent from the project, changes what this returns with no cleanup pass.
+// Recursion walks through non-task children too (a note under a task can hold
+// task grandchildren), but only task rows are returned. Same UNION-not-UNION-ALL
+// cycle discipline and bound as listSubtree, one shared cap across all roots.
+export async function listDescendantTasks(
+  ownerId: string,
+  rootIds: string[]
+): Promise<DescendantTask[]> {
+  if (rootIds.length === 0) return [];
+  // Each id is its own bound parameter (sql.join), so nothing here depends on
+  // how the driver serializes a JS array.
+  const idList = sql.join(
+    rootIds.map((id) => sql`${id}::uuid`),
+    sql`, `
+  );
+  const res = await getDb().execute(sql`
+    with recursive descendants as (
+      select id, type, title, status_category, properties, updated_at
+      from items
+      where parent_id in (${idList}) and owner_id = ${ownerId}
+        and deleted_at is null
+      union
+      select i.id, i.type, i.title, i.status_category, i.properties, i.updated_at
+      from items i join descendants d on i.parent_id = d.id
+      where i.owner_id = ${ownerId} and i.deleted_at is null
+    )
+    select id, title, status_category, properties, updated_at
+    from descendants where type = 'task'
+    order by updated_at asc limit ${SUBTREE_LIMIT}
+  `);
+  return (res.rows as Array<{
+    id: string;
+    title: string;
+    status_category: string;
+    properties: Record<string, unknown> | null;
+    updated_at: string | Date;
+  }>).map((r) => ({
+    id: r.id,
+    title: r.title,
+    statusCategory: r.status_category as StatusCategory,
+    properties: r.properties,
+    updatedAt: new Date(r.updated_at),
+  }));
+}
+
 export type Ancestor = {
   id: string;
   title: string;

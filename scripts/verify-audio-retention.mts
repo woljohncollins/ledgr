@@ -12,7 +12,7 @@ for (const line of readFileSync(".env.local", "utf8").replace(/^﻿/, "").split(
   if (m && !process.env[m[1]]) process.env[m[1]] = m[2].trim().replace(/^["']|["']$/g, "");
 }
 // Dummy R2 vars so getStorage() is configured for the transcription-start path
-// (publicUrl is pure string concat). The spy below is used for delete/purge.
+// (presignDownload signs locally, no network). The spy is used for delete/purge.
 for (const [k, v] of Object.entries({
   R2_ACCESS_KEY_ID: "test", R2_SECRET_ACCESS_KEY: "test", R2_BUCKET: "b",
   R2_ENDPOINT: "https://x.r2.cloudflarestorage.com", R2_PUBLIC_BASE_URL: "https://cdn.example.com",
@@ -47,7 +47,8 @@ const deleted: string[] = [];
 const spy: SP = {
   async presignUpload() { throw new Error("unused"); },
   async putObject() { throw new Error("unused"); },
-  publicUrl: (k) => `https://cdn.example.com/${k}`,
+  async listObjects() { throw new Error("unused"); },
+  async presignDownload(k) { return `https://signed.example.invalid/${k}`; },
   async deleteObject(k) { deleted.push(k); },
 };
 

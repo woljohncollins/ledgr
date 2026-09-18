@@ -3,7 +3,7 @@
 // point a nav slot at /today and optionally drive it with a custom dashboard.
 import { redirect } from "next/navigation";
 import DashboardView from "@/components/dashboards/DashboardView";
-import { TodayHome } from "@/app/page";
+import TodayHome from "@/app/_today-home";
 import { resolveOwner } from "@/lib/owner";
 import { getSettings } from "@/lib/settings";
 

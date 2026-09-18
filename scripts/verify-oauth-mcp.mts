@@ -27,6 +27,9 @@ const client = oauth.verifyClientId(clientId);
 check("client_id verifies", client !== null);
 check("client_id carries redirect_uris", JSON.stringify(client?.redirect_uris) === JSON.stringify(redirectUris));
 check("tampered client_id rejected", oauth.verifyClientId(clientId.slice(0, -2) + "xy") === null);
+const namedClientId = oauth.issueClientId(redirectUris, "Claude");
+check("client_id carries client_name when given", oauth.verifyClientId(namedClientId)?.client_name === "Claude");
+check("client_id without a name has none", oauth.verifyClientId(clientId)?.client_name === undefined);
 check("garbage client_id rejected", oauth.verifyClientId("not-a-token") === null);
 check("null client_id rejected", oauth.verifyClientId(null) === null);
 

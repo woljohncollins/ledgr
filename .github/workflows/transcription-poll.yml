@@ -12,8 +12,13 @@
 name: transcription-poll
 
 on:
-  schedule:
-    - cron: "*/15 * * * *"
+  # Schedule stopped 2026-09-09 (Neon wake-up audit). This only ever polled the
+  # CLOUD copy, where transcription is not configured, so every run was a no-op
+  # that woke Neon and held it awake for the fixed 5-min autosuspend tail. The
+  # hub's own supervisor schedules this job locally. Kept hand-runnable;
+  # re-enabling is one uncomment.
+  # schedule:
+  #   - cron: "*/15 * * * *"
   workflow_dispatch:
 
 permissions:

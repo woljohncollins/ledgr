@@ -1,7 +1,8 @@
 // Quick-capture box (PRD §4.2): title-only, type defaults to the catch-all
 // `unmarked` (§4.4, ADR-067) so it never pre-assumes a task; Enter submits and
-// keeps focus for rapid entry. Captures arrive untriaged (inbox: true) so they
-// queue in the Inbox until assigned a date/entity.
+// keeps focus for rapid entry. Captures name their arrival path
+// (source: "quick_capture") and the owner's Capture routing decides where they
+// land, which is the Inbox unless they changed it (ADR-249).
 //
 // When `typeOptions` is passed (the Inbox), a small "＋ details" toggle expands
 // the slim box into the shared CaptureCard (Slice 3) — the same type-picker +
@@ -28,7 +29,7 @@ export default function QuickCapture({
   async function capture() {
     const title = inputRef.current?.value.trim();
     if (!title || state === "busy") return;
-    const payload = { type: "unmarked", title, inbox: true };
+    const payload = { type: "unmarked", title, source: "quick_capture" };
     setState("busy");
     try {
       const res = await fetch("/api/items", {

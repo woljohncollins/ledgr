@@ -20,13 +20,17 @@ import { getType } from "@/lib/types";
 import { getSettings } from "@/lib/settings";
 import { tocForType } from "@/lib/toc";
 import WordCount from "@/components/canvas/WordCount";
+import { parseTabs } from "@/lib/editor/canvas-tabs";
 import SaveStatusIndicator from "@/components/canvas/SaveStatusIndicator";
 import ActiveContextTracker from "@/components/canvas/ActiveContextTracker";
 import FloatingToc from "@/components/canvas/FloatingToc";
 import ItemActionsMenu from "@/components/canvas/ItemActionsMenu";
+import ListenBar from "@/components/canvas/ListenBar";
 import PageTrashButton from "@/components/canvas/PageTrashButton";
 import TemplateBanner from "@/components/canvas/TemplateBanner";
 import TypeCue from "@/components/canvas/TypeCue";
+import { speechTextFor } from "@/lib/markdown-render";
+import { buildProjectMarkdown } from "@/lib/project-markdown";
 
 // Compact date for the chrome timestamps ("Jan 3, 2021").
 const CHROME_DATE = new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -97,9 +101,8 @@ export default async function ItemCanvas({
   // borrow a module's canvas; an unregistered type with no capability falls back
   // to the default markdown canvas, so this load is best-effort.
   const typeDef = await getType(item.type).catch(() => null);
-  const Canvas = canvasComponentFor(
-    canvasIdForType(item.type, owner.id, typeDef?.capability)
-  );
+  const canvasId = canvasIdForType(item.type, owner.id, typeDef?.capability);
+  const Canvas = canvasComponentFor(canvasId);
 
   // Table of contents (ADR-114): a per-type, owner-scoped reading preference
   // resolved here so the outline mounts once, universally, over whatever canvas
@@ -110,9 +113,33 @@ export default async function ItemCanvas({
   const toc = tocForType(settings, item.type);
 
   // Word count for the chrome (top-right on desktop, in the ⋯ menu everywhere).
-  // This is the count at load; the <WordCount> island keeps it current as the
-  // body editor is typed in.
-  const wordCount = wordCountOf(bodyMarkdown(item.body));
+  // A widget-home record (project/pursuit/custom hub) counts its COMPOSED
+  // markdown document (ADR-197) — the same text ⋯ → Markdown shows — because
+  // its own body is just the Overview and "0 words" over a full project read as
+  // wrong (Tyler, 2026-08-17). That count is a load-time snapshot (`live:
+  // false` below keeps the Overview editor from overwriting it with
+  // overview-only numbers); every other type keeps the live body count.
+  // A TABBED body (ADR-095) counts only its first tab, the one the canvas opens
+  // on, and says so: the whole-document number misleads when you work tab by
+  // tab (Tyler, 2026-09-02). TabbedBody keeps it on the active tab from there.
+  const composed = canvasId === "widgets";
+  const bodyTabs = composed ? null : parseTabs(bodyMarkdown(item.body));
+  const wordCountPerTab = Boolean(bodyTabs && bodyTabs.length > 0);
+  const wordCount = wordCountOf(
+    composed
+      ? await buildProjectMarkdown(owner.id, item)
+      : wordCountPerTab
+        ? (bodyTabs![0]?.body ?? "")
+        : bodyMarkdown(item.body)
+  );
+
+  // Listen (read-aloud), per-type opt-in (Build → Types "Listen" column).
+  // Computed here, not in the per-type canvas, so it works identically on
+  // EVERY canvas (default markdown, tabs, two-pane, module canvases) — the
+  // entry point is the kebab menu, not a canvas-specific bar.
+  const listenText = typeDef?.listenEnabled
+    ? speechTextFor(bodyMarkdown(item.body))
+    : "";
 
   return (
     <>
@@ -205,7 +232,14 @@ export default async function ItemCanvas({
                 <span aria-hidden>·</span>
                 <span>Updated {fmtChromeDate(item.updatedAt)}</span>
                 <span aria-hidden>·</span>
-                <span><WordCount itemId={item.id} initial={wordCount} /></span>
+                <span>
+                  <WordCount
+                    itemId={item.id}
+                    initial={wordCount}
+                    initialPerTab={wordCountPerTab}
+                    live={!composed}
+                  />
+                </span>
               </span>
               {variant === "page" && !item.isTemplate && (
                 <ItemActionsMenu
@@ -219,6 +253,9 @@ export default async function ItemCanvas({
                   createdLabel={fmtChromeDate(item.createdAt)}
                   updatedLabel={fmtChromeDate(item.updatedAt)}
                   wordCount={wordCount}
+                  wordCountPerTab={wordCountPerTab}
+                  wordCountLive={!composed}
+                  listen={Boolean(listenText)}
                 />
               )}
             </span>
@@ -229,6 +266,12 @@ export default async function ItemCanvas({
             identity is constant across renders, so React won't remount it. */}
         {/* eslint-disable-next-line react-hooks/static-components */}
         <Canvas item={item} ownerId={owner.id} variant={variant} arrange={arrange} />
+        {/* Mounted here, not in the per-type canvas, so it works on every canvas
+            (tabs, two-pane, module canvases included) — the bug a bespoke canvas
+            exposed. Renders nothing until armed (kebab click or ?listen=1). */}
+        {listenText && (
+          <ListenBar text={listenText} listenOpenInEdge={typeDef?.listenOpenInEdge ?? false} />
+        )}
       </div>
       {/* One always-visible autosave indicator for the whole canvas; also owns
           the cross-device conflict banner + refresh-on-focus check (ADR-134). */}

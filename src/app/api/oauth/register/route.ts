@@ -56,13 +56,19 @@ export async function POST(request: Request) {
     );
   }
 
-  const clientId = issueClientId(redirectUris as string[]);
+  // client_name (RFC 7591) is display-only metadata for the consent page;
+  // absent or junk just means the page falls back to the redirect host.
+  const clientName =
+    typeof body.client_name === "string" ? body.client_name.trim().slice(0, 64) : "";
+
+  const clientId = issueClientId(redirectUris as string[], clientName || undefined);
   // RFC 7591 registration response. Public client (PKCE), so no secret.
   return NextResponse.json(
     {
       client_id: clientId,
       client_id_issued_at: Math.floor(Date.now() / 1000),
       redirect_uris: redirectUris,
+      ...(clientName ? { client_name: clientName } : {}),
       token_endpoint_auth_method: "none",
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],

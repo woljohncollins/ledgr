@@ -12,6 +12,7 @@
 // document canvas (notes, links, journal, prayer, … — ADR-041/157).
 import ChordCanvas from "@/components/canvas/ChordCanvas";
 import EventCanvas from "@/components/canvas/EventCanvas";
+import FileCanvas from "@/components/canvas/FileCanvas";
 import LongformCanvas from "@/components/canvas/LongformCanvas";
 import MarkdownCanvas from "@/components/canvas/MarkdownCanvas";
 import MindmapCanvas from "@/components/canvas/MindmapCanvas";
@@ -29,6 +30,7 @@ const CANVAS_COMPONENTS: Record<string, CanvasComponent> = {
   event: EventCanvas,
   longform: LongformCanvas,
   chord: ChordCanvas,
+  file: FileCanvas,
   paper: PaperCanvas,
   task: TaskCanvas,
   mindmap: MindmapCanvas,

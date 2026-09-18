@@ -22,7 +22,9 @@ import {
 import { MENTION_ROLE } from "@/lib/mentions";
 import { dateToYmdUtc, ymdToUtcDate } from "@/lib/recurrence";
 import { relateItems } from "@/lib/relations";
-import { recomputeRelativeChildren } from "@/lib/relative-subtask-service";
+import { deriveOffsetChildren, shiftChildDates } from "@/lib/relative-subtask-service";
+import { applyOffset, relativeOffsetOf } from "@/lib/relative-subtask";
+import { dayDelta, isDuePinned, shiftDay } from "@/lib/date-anchor";
 import {
   parseApplyConfig,
   resolveDateRule,
@@ -490,6 +492,15 @@ export async function createItemFromTemplate(
   });
   await resolveTemplateVars(ownerId, rootId, { answers: opts.answers, now });
   await applyDateRules(ownerId, rootId, tmpl.applyConfig, now);
+  // The clone came out undated (cloneItemSubtree resets descendants), so the
+  // prototype's offset checklist resolves against the root's freshly applied
+  // date — the one place the ADR-085 offset still drives anything (ADR-253).
+  const root = await getItem(ownerId, rootId);
+  await deriveOffsetChildren(
+    ownerId,
+    rootId,
+    root.scheduledDate ? dateToYmdUtc(root.scheduledDate) : null
+  );
   return getItem(ownerId, rootId);
 }
 
@@ -582,28 +593,65 @@ export async function applyTemplateToExisting(
     .from(items)
     .where(and(eq(items.parentId, targetId), eq(items.ownerId, ownerId), isNull(items.deletedAt)));
   const existingTitles = new Set(existing.map((c) => (c.title ?? "").trim().toLowerCase()));
-  let addedSubtask = false;
+  // Pairs of (prototype child, its fresh clone): `cloneItemSubtree` deliberately
+  // clones children UNDATED, so the template's internal date shape is re-applied
+  // below once the target's own dates are settled.
+  const cloned: { protoChild: (typeof protoChildren)[number]; clonedId: string }[] = [];
   for (const child of protoChildren) {
     const childTitle = resolveVars(child.title ?? "", ctx).trim().toLowerCase();
     if (childTitle && existingTitles.has(childTitle)) continue;
     const { rootId: clonedId } = await cloneItemSubtree(ownerId, child.id, { parentId: targetId });
     await resolveTemplateVars(ownerId, clonedId, { answers: opts.answers, now, title: mergedTitle });
-    addedSubtask = true;
+    cloned.push({ protoChild: child, clonedId });
   }
 
-  // Apply the scalar/body/date patch (recomputes relative children when
-  // scheduledDate changes — ADR-085).
+  // Apply the scalar/body/date patch. This also carries the target's EXISTING
+  // subtasks along if it moves the scheduled date (ADR-253) — the clones added
+  // just above are still undated at this point, so they are untouched by it.
   if (Object.keys(patch).length) await updateItem(ownerId, targetId, patch);
 
-  // Make sure any newly-added relative subtasks derive their dates even when the
-  // patch didn't move scheduledDate.
-  if (addedSubtask) {
+  // Re-date the clones by anchoring (ADR-253): each keeps the gap it had from the
+  // PROTOTYPE's scheduled date, measured against the target's. So a template whose
+  // checklist runs "day 0, day +2, day +5" lands on the target's dates in the same
+  // shape. This replaces the ADR-085 offset re-derive, and reaches every clone
+  // rather than only the ones carrying a stored offset.
+  if (cloned.length) {
     const refreshed = await getItem(ownerId, targetId);
-    await recomputeRelativeChildren(
-      ownerId,
-      targetId,
-      refreshed.scheduledDate ? dateToYmdUtc(refreshed.scheduledDate) : null
-    );
+    const targetYmd = refreshed.scheduledDate ? dateToYmdUtc(refreshed.scheduledDate) : null;
+    const delta = dayDelta(proto.scheduledDate, refreshed.scheduledDate) ?? 0;
+    for (const { protoChild, clonedId } of cloned) {
+      const childProps = protoChild.properties as Record<string, unknown> | null;
+      // `relativeSchedule` survives ADR-253 as a TEMPLATE authoring device, and
+      // only here: a prototype usually carries no concrete dates at all, so there
+      // is no gap to measure and the stored offset is the only statement of "day
+      // +1 of the checklist". Live subtask trees need none of this — they anchor
+      // off the dates they already have.
+      const offset = relativeOffsetOf(childProps);
+      const scheduledDate =
+        offset !== null && targetYmd
+          ? ymdToUtcDate(applyOffset(targetYmd, offset))
+          : shiftDay(protoChild.scheduledDate, delta);
+      // The deadline keeps its gap from the child's own plan date; with no
+      // prototype plan date to measure against it rides the root delta.
+      const childDelta = dayDelta(protoChild.scheduledDate, scheduledDate) ?? delta;
+      const dueDate = isDuePinned(childProps)
+        ? protoChild.dueDate
+        : shiftDay(protoChild.dueDate, childDelta);
+      if (scheduledDate || dueDate) {
+        await getDb()
+          .update(items)
+          .set({ scheduledDate, dueDate, updatedAt: new Date() })
+          .where(and(eq(items.id, clonedId), eq(items.ownerId, ownerId)));
+      }
+      // Deeper levels: offsets resolve against this clone's new date, and any
+      // absolutely-dated descendant rides the same delta.
+      await deriveOffsetChildren(
+        ownerId,
+        clonedId,
+        scheduledDate ? dateToYmdUtc(scheduledDate) : null
+      );
+      if (delta !== 0) await shiftChildDates(ownerId, clonedId, delta);
+    }
   }
 
   // Add the template's outgoing relations (skip mentions + ones already present).

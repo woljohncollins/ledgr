@@ -11,7 +11,7 @@ import { useEffect, useState, type ReactNode } from "react";
 type Opt = { id: string; name: string; isDefault: boolean };
 
 const fieldClass =
-  "rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-sm text-neutral-200 outline-none focus:border-neutral-600 [color-scheme:dark]";
+  "rounded border border-neutral-800 bg-neutral-950 px-2 py-1.5 text-sm text-neutral-200 outline-none focus:border-neutral-600";
 
 export default function ApplyTemplateButton({
   itemId,

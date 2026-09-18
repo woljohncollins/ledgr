@@ -16,6 +16,7 @@
 
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
+import { openItem } from "@/lib/item-nav";
 import { beginSave, endSave } from "@/lib/save-status";
 import {
   addDaysYmd,
@@ -139,7 +140,7 @@ export default function RecurrenceCalendar({
       if (!res.ok) throw new Error(String(res.status));
       const { itemId: newId } = (await res.json()) as { itemId: string };
       endSave(true);
-      router.push(`/items/${newId}`); // land on the carved one-off to edit it
+      openItem(router, newId); // land on the carved one-off to edit it
     } catch {
       setError("Could not carve this occurrence.");
       endSave(false);

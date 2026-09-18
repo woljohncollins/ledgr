@@ -31,6 +31,20 @@ function overdueWhere(ownerId: string, dueToday: Date): SQL {
 // Roll every overdue planned task forward to today: set its scheduled (planned)
 // date to today so it lands in today's plan. The deadline (due_date) is left
 // alone — a missed deadline stays a fact. Returns the count moved.
+//
+// DELIBERATELY OUTSIDE DATE ANCHORING (ADR-253). Everywhere else, moving a plan
+// date carries the deadline and the subtask tree by the same delta; this one
+// bulk statement does neither, for two reasons:
+//   1. The deadline exception is the older, stronger rule (ADR-078): the roll is
+//      a recovery action for work you missed, not a replan, and advancing the
+//      deadline would erase the fact that you blew it.
+//   2. The roll FLATTENS by design — every stale task lands on today, each row
+//      independently — so overdue children are already picked up by the same
+//      predicate. Applying a per-row delta on top would move them twice.
+// The gap this leaves: a FUTURE-dated child of an overdue parent keeps its date
+// while the parent jumps forward, so their spacing closes up. Rare (it needs a
+// subtask dated ahead of a parent that is already late) and left as a known
+// exception rather than silently picking a semantic — see next_steps.md.
 export async function rollOverdueScheduled(
   ownerId: string,
   now = new Date()

@@ -1,0 +1,77 @@
+# Pre-merge CI — the check that was missing.
+#
+# `main` failed to build TWICE in August 2026 and both changes merged green: an
+# `unknown` passed to a `string` param (PR #214), then a second named export in
+# `src/app/page.tsx`, which a Next.js page file may not carry. `next build` runs
+# the typecheck, so in both cases EVERY Vercel production deploy from `main` was
+# failing — and the only reason anyone found out was someone noticing later. The
+# same gap had quietly broken six verify scripts nobody had run in months.
+#
+# `main` is Brandon's production deploy trigger, so a red `main` is a broken
+# production deploy. This runs on pull requests AND on pushes to main, because
+# the second breakage arrived by a direct push, not a PR.
+#
+# NO SECRETS, deliberately. The build is verified to pass with neither
+# DATABASE_URL nor a Clerk key: the db client is a lazy singleton that only needs
+# a URL when a query runs (src/db/index.ts), and the keyless auth fallback is
+# keyed on VERCEL_ENV, which GitHub Actions does not set (ADR-184) — that split
+# exists for exactly this job. Keeping CI secretless means a fork PR runs it too,
+# and that nothing here can touch production data.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  # So a red result can be re-checked after a fix without an empty commit.
+  workflow_dispatch:
+
+# A new push to the same PR makes the in-flight run irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # Node 24 (current LTS). Local dev is on 25 and Next 16 supports 20.9+, so
+      # this is comfortably inside the supported band; deliberately NOT pinned via
+      # .nvmrc, which would change which version a collaborator's `nvm use` picks.
+      # Worth confirming against the Vercel project's runtime if they ever diverge.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      # `ci` not `install`: respect the lockfile exactly, and fail if it and
+      # package.json disagree rather than silently resolving something else.
+      - run: npm ci
+
+      # Ordered cheapest-first so an obvious break reports in seconds. Each step
+      # runs even if an earlier one failed (`!cancelled()`), because seeing all
+      # four results in one run beats fixing one thing per push.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        if: '!cancelled()'
+        run: npm run lint
+
+      # The step that would have caught both production breakages: `next build`
+      # typechecks generated route types, which plain `tsc` does not.
+      - name: Build
+        if: '!cancelled()'
+        run: npm run build
+
+      # Every verify script that needs no DB and no server (51 of 130). The
+      # DB-backed suites stay a local/manual step — see runbook.md.
+      - name: Verify (pure suites)
+        if: '!cancelled()'
+        run: npm run verify:ci

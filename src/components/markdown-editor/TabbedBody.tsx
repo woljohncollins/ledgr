@@ -19,16 +19,20 @@ import {
   serializeTabs,
   type CanvasTab,
 } from "@/lib/editor/canvas-tabs";
+import { publishBodyMarkdown } from "@/lib/word-count";
 
 export type TabbedBodyProps = {
   itemId: string;
   initialMarkdown: string;
-  uploadImage: (file: File) => Promise<string>;
+  uploadFile: (file: File) => Promise<string>;
   // Receives the full reassembled body markdown (all tabs) to save.
   onChange: (markdown: string) => void;
   onRequestSave?: () => Promise<void>;
   promoteToMeetingId?: string;
   promotedRefs?: PromotedRefs;
+  // Papers only: forwarded straight to the active tab's editor so `[^id]`
+  // footnote markers survive a save (FootnoteMarkdownFix, extensions.ts).
+  preserveFootnotes?: boolean;
   // When false (a locked item): the editor is read-only and the tab controls
   // (add / rename / delete) are hidden, so the body can't be restructured.
   editable?: boolean;
@@ -66,11 +70,12 @@ export type TabbedBodyProps = {
 export default function TabbedBody({
   itemId,
   initialMarkdown,
-  uploadImage,
+  uploadFile,
   onChange,
   onRequestSave,
   promoteToMeetingId,
   promotedRefs,
+  preserveFootnotes = false,
   editable = true,
   controlledSection,
   readingFirst,
@@ -198,6 +203,18 @@ export default function TabbedBody({
     onTabsPresence?.(tabs !== null);
   }, [tabs, onTabsPresence]);
 
+  // Word count by tab (Tyler, 2026-09-02): while the body is tabbed, the chrome
+  // counts the ACTIVE tab, not the whole document. Published after commit, so it
+  // lands on top of ItemEditor's whole-body publish from the same change (last
+  // publish wins in the store) and again on every tab switch. A follower (Desk
+  // mirror) stays quiet so it can't fight the source editor over the count.
+  // When the last tab is removed, tabs go null and ItemEditor's whole-body
+  // publish for that change stands on its own.
+  useEffect(() => {
+    if (follower || !tabs) return;
+    publishBodyMarkdown(itemId, tabs[activeIdx]?.body ?? "", { perTab: true });
+  }, [tabs, activeIdx, itemId, follower]);
+
   return (
     <div>
       {hideChrome ? null : tabs ? (
@@ -294,7 +311,7 @@ export default function TabbedBody({
         key={tabs ? `tab-${activeIdx}-${tabs.length}` : "untabbed"}
         itemId={itemId}
         initialMarkdown={editorInitial}
-        uploadImage={uploadImage}
+        uploadFile={uploadFile}
         onChange={onEditorChange}
         promoteToMeetingId={promoteToMeetingId}
         promotedRefs={promotedRefs}
@@ -304,6 +321,7 @@ export default function TabbedBody({
         focusSignal={focusSignal}
         toolbarOpen={toolbarOpen}
         viewControls={viewControls}
+        preserveFootnotes={preserveFootnotes}
       />
     </div>
   );

@@ -19,9 +19,15 @@
 name: calendar-sync
 
 on:
-  schedule:
-    - cron: "0 13,18,22 * * 1-5"
-    - cron: "0 13 * * 6,0"
+  # Schedule stopped 2026-09-09 (Neon wake-up audit). The local hub owns this
+  # job now (the Build -> Network picker, ADR-225), so the cloud copy read
+  # users.settings to learn it must stand down and then did nothing, paying a
+  # Neon wake plus the fixed 5-min autosuspend tail each time. The hub runs it
+  # on its own supervisor schedule. Kept hand-runnable; re-enabling is one
+  # uncomment.
+  # schedule:
+  #   - cron: "0 13,18,22 * * 1-5"
+  #   - cron: "0 13 * * 6,0"
   workflow_dispatch:
 
 permissions:

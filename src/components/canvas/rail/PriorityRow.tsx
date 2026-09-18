@@ -9,7 +9,7 @@ import { useRouter } from "next/navigation";
 import { beginSave, endSave } from "@/lib/save-status";
 import { PRIORITIES, priorityStyle, type Priority } from "@/lib/priority";
 import Popover from "@/components/ui/Popover";
-import { RowFace, MenuItem } from "./row-ui";
+import { RowFace, MenuItem, FlagGlyph } from "./row-ui";
 import { RAIL_TRIGGER } from "./styles";
 
 export default function PriorityRow({
@@ -55,7 +55,12 @@ export default function PriorityRow({
       width={208}
       triggerClassName={RAIL_TRIGGER}
       trigger={
-        <RowFace label="Priority" empty={val == null}>
+        <RowFace
+          label="Priority"
+          empty={val == null}
+          inline
+          icon={<FlagGlyph className={cur ? cur.text : "text-ink-faint"} />}
+        >
           {cur ? <span className={cur.text}>{cur.label}</span> : "Add"}
         </RowFace>
       }

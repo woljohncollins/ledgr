@@ -245,7 +245,7 @@ export function useRowMenu(opts: RowMenuOptions) {
                   value={null}
                   onCommit={schedule}
                   ariaLabel="Scheduled date"
-                  className="rounded border border-line bg-surface-1 px-1 py-0.5 text-xs text-ink [color-scheme:dark]"
+                  className="rounded border border-line bg-surface-1 px-1 py-0.5 text-xs text-ink"
                 />
               </label>
               <button type="button" onClick={() => schedule(null)} className="rounded px-2 py-1 text-left text-sm text-ink-muted hover:bg-surface-2 hover:text-ink">

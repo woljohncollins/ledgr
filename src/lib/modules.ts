@@ -78,6 +78,82 @@ export type IntegrationDef = {
   direction: "pull" | "push" | "bidirectional";
 };
 
+// --- surfaces (ADR-260) ----------------------------------------------------
+//
+// A SURFACE is one named place content lives on an item of this type. Most types
+// have exactly one (the markdown body) and never think about it. A bespoke type
+// has several: a paper is Notes + Shape + Quote Bank + Outline + Draft, a song is
+// Notes + Chart. Those surfaces were real in the canvas from the day each module
+// shipped, but they existed ONLY as canvas-local knowledge — the canvas knew that
+// `properties.notes` was thinking-space and `body` was the artifact, and nothing
+// else did.
+//
+// That gap is what this type closes. The API returned the surfaces all along
+// (GET /api/items/[id] hands back `properties` wholesale), and MCP did too
+// (rowView passes `properties` through), but neither NAMED them, so a caller had
+// an untyped blob and no way to tell a paper's draft from its notes. Asked to
+// "add my notes to this paper", an agent appended to the draft — the one surface
+// that is the deliverable.
+//
+// Declaring them here rather than in each reader keeps one source of truth: the
+// registry already owns a type's code behavior (canvas, canonical format,
+// exporters), so surfaces sit beside those and every consumer — MCP, the REST
+// API, and later the exporters — resolves the same list.
+export type SurfaceStorage =
+  // The item's canonical body column.
+  | { kind: "body" }
+  // A key under items.properties.
+  | { kind: "property"; key: string }
+  // No storage of its own: a projection over other surfaces (a paper's Outline
+  // is its sections and quote bank rendered together). Read-only by definition —
+  // a writer edits the surfaces it derives from.
+  | { kind: "derived"; from: string[] };
+
+export type SurfaceDef = {
+  // Stable slug, unique within the type. The id a caller names on read/write.
+  id: string;
+  // What the canvas calls this surface, so an agent's language matches the UI's.
+  label: string;
+  storage: SurfaceStorage;
+  // The content format: a body-format string ("markdown", "chordpro") for prose
+  // surfaces, or "json" for a structured one (a quote bank is an array of
+  // objects, not text).
+  format: string;
+  // What belongs here, written for a model deciding where to put something. This
+  // is the field that stops "add my notes" landing in the draft.
+  description: string;
+  // The finished artifact — the surface an export renders from. At most one per
+  // type. A caller told to leave the artifact alone knows which one that is.
+  primary?: boolean;
+  // Structured or projected surfaces an agent should not free-write as text.
+  readOnly?: boolean;
+  // For a "json" surface: the shape of ONE element of the array, as
+  // `key: description` pairs, with a `!` prefix marking a required key.
+  //
+  // This exists because of the 2026-09-16 incident: an agent filled a paper's
+  // Shape and Quote Bank by GUESSING the element shape (`{title, body}` for a
+  // section, `{quote, source, citation, note}` for a quote). Both guesses were
+  // wrong, nothing rejected them, and the record became unopenable. Naming the
+  // format and saying "these are structured" was not enough: a caller also needs
+  // to know what one row LOOKS like. Descriptive, not enforcing — the enforcing
+  // half is still owed (see next_steps.md).
+  elements?: Record<string, string>;
+};
+
+// The surface every ordinary type has: its markdown body, and nothing else.
+export function defaultSurfaces(format: string = MARKDOWN_FORMAT): SurfaceDef[] {
+  return [
+    {
+      id: "body",
+      label: "Body",
+      storage: { kind: "body" },
+      format,
+      description: "The item's main content.",
+      primary: true,
+    },
+  ];
+}
+
 // A type a module defines. `key` matches items.type and the types-table row the
 // module seeds at install. `canonicalFormat` makes "more than one body format,
 // keyed off type" a real platform capability (Tyler PR #1 decision #1) — markdown
@@ -91,6 +167,9 @@ export type ModuleTypeDef = {
   canonicalFormat: string;
   canvasId: string;
   icon?: string;
+  // The named places content lives on this type (ADR-260). Omit for the ordinary
+  // single-body shape; `surfacesForType` falls back to `defaultSurfaces`.
+  surfaces?: SurfaceDef[];
 };
 
 // An *attachable capability* (SPIKE — bespoke-tool catalog, next_steps.md:94).
@@ -109,6 +188,10 @@ export type ModuleCapability = {
   usage: string; // how it can be used (the catalog's "for example…")
   canvasId: string;
   canonicalFormat: string;
+  // Same as ModuleTypeDef.surfaces (ADR-260): a type that BORROWS this capability
+  // gets these surfaces, so a user-named "Worship Set" carrying `chord-chart`
+  // exposes the same Notes + Chart pair the `song` type does.
+  surfaces?: SurfaceDef[];
   // A hidden capability still *resolves* (a type carrying it gets its canvas/
   // format) but is NOT offered in the Build "Bespoke tools" catalog — it isn't
   // something the user picks. Used by `widget-home`, which is now the automatic
@@ -188,13 +271,13 @@ export const coreModule: ModuleManifest = {
       // widgets bound to the record (PRD §0). The body stays markdown (the
       // Overview widget renders it), so the canonical format is unchanged.
       //
-      // `hidden`: this is no longer a pickable "bespoke tool" — it is the default
-      // homepage for CUSTOM types (TypeBuilder sets it at create; core module
-      // types keep their purpose-built canvas since `typeDefFor` wins first). It
-      // stays a resolvable capability so the types that carry it (custom types,
-      // Project, Pursuit) still route to the widget canvas — it's just dropped
-      // from the Build catalog. (Direction: eventually every type; custom-only for
-      // now — Brandon/Tyler, 2026-07-01.)
+      // `hidden`: not a pickable "bespoke tool" — the Build catalog doesn't
+      // offer it. Since ADR-204 it is an EXPLICIT OPT-IN, not the silent
+      // default it was from 2026-07-01: TypeBuilder's "Project-style page"
+      // checkbox writes it (a new custom type without the checkbox gets the
+      // plain document canvas). It stays a resolvable capability so the types
+      // that carry it (custom types that opted in, Project, Pursuit) still
+      // route to the widget canvas.
       id: "widget-home",
       label: "Widget homepage",
       description: "Compose this type's page from widgets (tasks, notes, milestones, progress, …) bound to the record.",
@@ -341,6 +424,37 @@ export function canonicalFormatForType(
     if (cap) return cap.canonicalFormat;
   }
   return MARKDOWN_FORMAT;
+}
+
+// The named surfaces a type exposes (ADR-260). Same resolution order as every
+// resolver above — a registered module type wins, then an attached capability,
+// then the default — so a user-named type borrowing `paper-workspace` reports
+// the paper's five surfaces, and an ordinary type reports its single body. The
+// fallback threads the type's canonical format through, so a chordpro type with
+// no declared surfaces still says "body, chordpro" rather than claiming markdown.
+export function surfacesForType(
+  type: string,
+  ownerId?: string,
+  capability?: string | null
+): SurfaceDef[] {
+  const def = typeDefFor(type, ownerId);
+  if (def) return def.surfaces ?? defaultSurfaces(def.canonicalFormat);
+  if (capability) {
+    const cap = capabilityById(capability, ownerId);
+    if (cap) return cap.surfaces ?? defaultSurfaces(cap.canonicalFormat);
+  }
+  return defaultSurfaces();
+}
+
+// One surface by id, or undefined. The lookup a write path uses to turn
+// `surface: "notes"` into "merge properties.notes".
+export function surfaceById(
+  type: string,
+  surfaceId: string,
+  ownerId?: string,
+  capability?: string | null
+): SurfaceDef | undefined {
+  return surfacesForType(type, ownerId, capability).find((s) => s.id === surfaceId);
 }
 
 // The deterministic exporters a type offers (markdown→docx, ChordPro→chart). A

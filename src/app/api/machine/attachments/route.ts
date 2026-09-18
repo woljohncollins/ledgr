@@ -11,7 +11,7 @@
 // configured; built for the migration's ~3,900-image pass.
 import { NextResponse } from "next/server";
 import { asUuid } from "@/lib/api";
-import { verifyApiToken } from "@/lib/auth/oauth";
+import { verifyApiRequest } from "@/lib/auth/credentials";
 import { createAttachment } from "@/lib/attachments";
 import { ItemError } from "@/lib/items";
 import { resolveMachineOwner } from "@/lib/machine/owner";
@@ -20,7 +20,7 @@ import { captureError } from "@/lib/log";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
-  const identity = verifyApiToken(request.headers.get("authorization"));
+  const identity = await verifyApiRequest(request.headers.get("authorization"));
   if (!identity) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }

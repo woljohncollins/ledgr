@@ -22,7 +22,6 @@ for (const [k, v] of Object.entries({
   R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY || "test",
   R2_BUCKET: process.env.R2_BUCKET || "test-bucket",
   R2_ENDPOINT: process.env.R2_ENDPOINT || "https://example.r2.cloudflarestorage.com",
-  R2_PUBLIC_BASE_URL: process.env.R2_PUBLIC_BASE_URL || "https://cdn.example.com",
 })) {
   process.env[k] = v;
 }

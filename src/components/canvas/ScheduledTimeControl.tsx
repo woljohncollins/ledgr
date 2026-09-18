@@ -32,7 +32,7 @@ const DURATIONS: { value: number; label: string }[] = [
 ];
 
 const controlClass =
-  "rounded border border-neutral-800 bg-neutral-900 px-1.5 py-0.5 text-sm text-neutral-200 outline-none focus:border-neutral-600 [color-scheme:dark]";
+  "rounded border border-neutral-800 bg-neutral-900 px-1.5 py-0.5 text-sm text-neutral-200 outline-none focus:border-neutral-600";
 
 export default function ScheduledTimeControl({
   itemId,

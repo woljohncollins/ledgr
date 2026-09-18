@@ -18,6 +18,13 @@ import {
   type MentionHit,
 } from "./useMentionTypeahead";
 import { LinkedChips, MentionPopup, useTypeGlyphs, type LinkedItem } from "./mention-ui";
+import {
+  createMentionTarget,
+  createTargets,
+  type CreateTarget,
+} from "@/lib/mention-create";
+import { loadTypes, type TypeMeta } from "@/components/search/type-token";
+import { announceFloatingOpen } from "@/lib/floating";
 
 export type { LinkedItem };
 
@@ -48,22 +55,39 @@ export default function MentionTitleField({
   // The rawQuery an Escape / blur dismissed at: the popup stays shut until the
   // user types again (any keystroke clears it), mirroring the editor.
   const [dismissedQuery, setDismissedQuery] = useState<string | null>(null);
+  // The type registry, for the create-on-miss rows (which types a bare name can
+  // be created as). Memoized in type-token, so this is one shared fetch.
+  const [types, setTypes] = useState<TypeMeta[]>([]);
+  useEffect(() => {
+    void loadTypes().then(setTypes);
+  }, []);
 
   const active = useMemo(() => detectMentionToken(value, caret), [value, caret]);
   const { hits, typeFilter, query } = useMentionTypeahead(active);
 
   const alreadyLinked = (id: string) => linked.some((l) => l.id === id);
   const visibleHits = hits.filter((h) => !alreadyLinked(h.id));
-  // Create-on-miss (ADR-067 parity with the editor): offer it when there's a
-  // non-empty query with no exact title match among the hits.
+  // Create-on-miss (parity with the editor): offer it when there's a non-empty
+  // query with no exact title match among the hits. One row per type it could be
+  // (lib/mention-create.ts) — a scoped "@/person Jane" yields exactly one.
   const showCreate =
     query !== "" &&
     !hits.some((h) => h.title.trim().toLowerCase() === query.toLowerCase());
-  const rowCount = visibleHits.length + (showCreate ? 1 : 0);
+  const targets = useMemo(
+    () => (showCreate ? createTargets(types, typeFilter) : []),
+    [showCreate, types, typeFilter]
+  );
+  const rowCount = visibleHits.length + targets.length;
 
   const dismissed = active != null && dismissedQuery === active.rawQuery;
   const open = active != null && !dismissed && rowCount > 0;
   const sel = Math.min(selected, Math.max(0, rowCount - 1));
+
+  // Close any other open floating panel when this typeahead appears. Announced on
+  // the OPEN transition only, so it doesn't re-fire per keystroke.
+  useEffect(() => {
+    if (open) announceFloatingOpen("capture-mention");
+  }, [open]);
 
   // A latest-state ref for the once-registered Escape listener below, kept fresh
   // in an effect (never written during render).
@@ -112,30 +136,23 @@ export default function MentionTitleField({
     });
   }
 
-  async function createAndLink() {
+  // Create the item as the picked type, then link it like any other hit. A null
+  // return means the POST failed: the "@query" text stays put so it isn't lost
+  // and the user can retry.
+  async function createAndLink(target: CreateTarget) {
     if (creating || !query) return;
     setCreating(true);
-    try {
-      const res = await fetch("/api/items", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: typeFilter?.key ?? "unmarked", title: query, inbox: true }),
-      });
-      if (!res.ok) return;
-      const { item } = (await res.json()) as {
-        item: { id: string; title?: string; type?: string | null };
-      };
-      link({ id: item.id, title: item.title || query, type: item.type ?? typeFilter?.key ?? null });
-    } catch {
-      // offline / transient: leave the "@query" text in place so it isn't lost
-    } finally {
-      setCreating(false);
-    }
+    const made = await createMentionTarget(query, target);
+    setCreating(false);
+    if (made) link({ id: made.id, title: made.title, type: made.type });
   }
 
   function pickSelected() {
     if (sel < visibleHits.length) link(visibleHits[sel]);
-    else if (showCreate) void createAndLink();
+    else {
+      const target = targets[sel - visibleHits.length];
+      if (target) void createAndLink(target);
+    }
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -190,13 +207,13 @@ export default function MentionTitleField({
           <MentionPopup
             hits={visibleHits}
             selected={sel}
-            showCreate={showCreate}
+            createTargets={targets}
             creating={creating}
             query={query}
             typeFilter={typeFilter}
             onHover={setSelected}
             onPick={link}
-            onCreate={() => void createAndLink()}
+            onCreate={(target) => void createAndLink(target)}
             glyph={glyph}
             typeLabel={typeLabel}
           />

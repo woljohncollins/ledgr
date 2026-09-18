@@ -298,3 +298,24 @@ export function markdownToText(markdown: string): string {
     .trim();
   return text;
 }
+
+// Fenced/inline code, stripped to a space rather than read aloud (the Listen
+// feature, ADR-listen-tts). Cheap regexes rather than a fence-aware line walk
+// (comment-markdown.ts's mapLines) because speech text tolerates a little
+// imprecision that FTS/print can't — this only ever feeds speechSynthesis.
+function stripCodeForSpeech(markdown: string): string {
+  return markdown
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/~~~[\s\S]*?~~~/g, " ")
+    .replace(/`[^`\n]+`/g, " ");
+}
+
+// Markdown → plain text for the Listen (read-aloud) control. Strips
+// CriticMarkup comments entirely (stripComments — a private note to self
+// should never be read aloud, same rule print/share/export already follow),
+// then code (spoken code is noise, not prose), then renders through
+// markdownToText for the rest (headings, links, mentions → plain words).
+export function speechTextFor(markdown: string): string {
+  if (!markdown) return "";
+  return markdownToText(stripCodeForSpeech(stripComments(markdown)));
+}

@@ -1,51 +1,97 @@
-// Presentational pieces shared by the rail's popover rows (ADR-108): the row
-// "face" (label · value · chevron) used as a Popover trigger, the disclosure
-// chevron, and a menu item for the small option menus (Priority, Status). Pure
-// components (no hooks) — they render client when used inside the client rows.
+// Presentational pieces shared by the rail's popover rows (ADR-108; restyled to
+// the Todoist section shape, Tyler 2026-08-18): the row "face" — a small label
+// line with the value (and an optional leading glyph) stacked under it — used
+// as a Popover trigger, a few house-style glyphs for those rows, and a menu
+// item for the small option menus (Priority, Status). Pure components (no
+// hooks) — they render client when used inside the client rows.
 
 import type { ReactNode } from "react";
+import { RAIL_LABEL } from "./styles";
 
-// The disclosure chevron on a tappable row; brightens on row hover.
-export function Chevron() {
+const GLYPH = "h-4 w-4 shrink-0";
+
+export function CalendarGlyph({ className = "" }: { className?: string }) {
   return (
-    <svg
-      aria-hidden
-      viewBox="0 0 20 20"
-      className="h-3.5 w-3.5 shrink-0 text-neutral-600 transition-colors group-hover:text-neutral-400"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-    >
-      <path d="M7 5l5 5-5 5" strokeLinecap="round" strokeLinejoin="round" />
+    <svg aria-hidden viewBox="0 0 24 24" className={`${GLYPH} ${className}`} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="4" y="5" width="16" height="16" rx="2" />
+      <path d="M4 9h16M8 3v4M16 3v4" />
     </svg>
   );
 }
 
-// Label on the left, value (or muted placeholder) + chevron on the right.
+export function TargetGlyph({ className = "" }: { className?: string }) {
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" className={`${GLYPH} ${className}`} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="12" r="4.5" />
+      <circle cx="12" cy="12" r="0.8" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+// A pushpin: "this date stands still while its anchor moves" (ADR-253).
+export function PinGlyph({ className = "" }: { className?: string }) {
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" className={`${GLYPH} ${className}`} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 17v5" />
+      <path d="M9 3h6l-1 6 3 3v2H7v-2l3-3z" />
+    </svg>
+  );
+}
+
+export function FlagGlyph({ className = "" }: { className?: string }) {
+  return (
+    <svg aria-hidden viewBox="0 0 24 24" className={`${GLYPH} ${className}`} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5 21V4" />
+      <path d="M5 4c4-2 6 2 10 0v9c-4 2-6-2-10 0" />
+    </svg>
+  );
+}
+
+// Small label line on top, value (or muted placeholder) with an optional
+// leading glyph under it — the Todoist stacked section. `inline` keeps a short
+// value (Priority's P-chip) on the label's own line instead (Tyler, 2026-08-18:
+// "to the right rather than underneath").
 export function RowFace({
   label,
   empty = false,
   overdue = false,
+  icon,
+  inline = false,
   children,
 }: {
   label: string;
   empty?: boolean;
   // A past-due scheduled/due date on an open task — the value shows red.
   overdue?: boolean;
+  // A leading glyph on the value line (calendar, flag…); dims when empty.
+  icon?: ReactNode;
+  inline?: boolean;
   children: ReactNode;
 }) {
-  return (
-    <>
-      <span className="shrink-0 text-neutral-400">{label}</span>
-      <span
-        className={`flex min-w-0 items-center justify-end gap-1.5 ${
-          overdue ? "text-red-400" : empty ? "text-neutral-600" : "text-neutral-200"
-        }`}
-      >
-        <span className="min-w-0 truncate">{children}</span>
-        <Chevron />
+  const value = (
+    <span
+      className={`flex min-w-0 items-center gap-2 ${
+        overdue ? "text-red-400" : empty ? "text-ink-faint" : "text-ink"
+      }`}
+    >
+      {icon}
+      <span className="min-w-0 truncate">{children}</span>
+    </span>
+  );
+  if (inline) {
+    return (
+      <span className="flex w-full items-center justify-between gap-3">
+        <span className={RAIL_LABEL}>{label}</span>
+        {value}
       </span>
-    </>
+    );
+  }
+  return (
+    <span className="flex w-full flex-col gap-1">
+      <span className={RAIL_LABEL}>{label}</span>
+      {value}
+    </span>
   );
 }
 

@@ -27,9 +27,14 @@ check("papers module registered", moduleForType("paper")?.id === "papers");
 check("paper resolves the paper canvas", canvasIdForType("paper") === "paper");
 check("paper resolves the markdown format", canonicalFormatForType("paper") === "markdown");
 check("songs still registered", moduleForType("song")?.id === "songs");
+// `note` resolves the LONGFORM canvas (ADR-157), not the plain markdown one.
+// This asserted "markdown" and had been failing silently since, because nothing
+// ran it. The point is that note keeps its own core canvas rather than picking up
+// the paper canvas, so name the canvas instead of assuming the default.
 check(
   "core types unaffected",
-  canvasIdForType("note") === "markdown" && canonicalFormatForType("task") === "markdown"
+  canvasIdForType("note") === "longform" && canonicalFormatForType("task") === "markdown",
+  `note canvas=${canvasIdForType("note")} task format=${canonicalFormatForType("task")}`
 );
 
 // ── MSM citation engine: books ────────────────────────────────────────────────

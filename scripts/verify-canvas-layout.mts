@@ -12,6 +12,7 @@ import {
   parseCanvasLayout,
   reconcile,
   resolveLayout,
+  FOOTER_IDS,
   GRID_COLS,
   type CanvasLayout,
 } from "../src/lib/canvas-layout";
@@ -34,7 +35,7 @@ function readingOrder(layout: CanvasLayout, bp: "lg" | "md" | "sm" = "lg"): stri
 const taskProps: PropertyDef[] = [];
 const taskVocab = cardVocabulary("task", taskProps);
 check(
-  "task vocabulary is title → system strip → body → recurrence → completions → subtasks → related → discover → save → share → history → meta",
+  "task vocabulary is title → system strip → body → recurrence → completions → subtasks → related → discover → files → save → share → history → meta",
   JSON.stringify(taskVocab) ===
     JSON.stringify([
       "title",
@@ -48,6 +49,9 @@ check(
       "subtasks",
       "related",
       "discover",
+      // files joined the vocabulary in ADR-237 addendum 3 (the arrangeable
+      // Files card), between the content web and export.
+      "files",
       "saveOffline",
       "share",
       "history",
@@ -175,6 +179,27 @@ check("reconcile preserves a kept card's user mode", (() => {
   const pinned = JSON.parse(JSON.stringify(before)) as CanvasLayout;
   pinned.cards["rel:author"] = { mode: "fixed" }; // user pinned it
   return reconcile(pinned, "book", afterProps).cards["rel:author"]?.mode === "fixed";
+})());
+
+// --- reconcile sinks the footer cards under everything else (ADR-256) ---
+
+check("reconcile places a newly-added property ABOVE the footer cards", (() => {
+  const order = readingOrder(reconciled);
+  const added = order.indexOf("prop:isbn");
+  return FOOTER_IDS.every((id) => order.indexOf(id) > added);
+})());
+check("reconcile sinks a footer card the user dragged to the top, on every breakpoint", (() => {
+  const moved = JSON.parse(JSON.stringify(before)) as CanvasLayout;
+  for (const bp of ["lg", "md", "sm"] as const) {
+    const m = moved.layouts[bp].find((c) => c.i === "meta")!;
+    m.x = 0;
+    m.y = 0;
+  }
+  const out = reconcile(moved, "book", bookProps);
+  return (["lg", "md", "sm"] as const).every((bp) => {
+    const o = readingOrder(out, bp);
+    return o.indexOf("meta") > o.indexOf("body") && o.indexOf("meta") > o.indexOf("related");
+  });
 })());
 
 // --- deriveResponsive fills md/sm from lg --------------------------------

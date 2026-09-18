@@ -146,7 +146,7 @@
 }
 
 .ledgr-prose code {
-  background: #262626;
+  background: var(--surface-2);
   border-radius: 0.25rem;
   padding: 0.05rem 0.3rem;
   font-size: 0.85em;
@@ -166,6 +166,10 @@
 .ledgr-prose a {
   color: #5aa9e6;
   text-decoration: underline;
+  /* Inside the contenteditable, anchors inherit the text cursor, which reads
+     as "not clickable" even though a click does open the link (Tyler,
+     2026-08-29 — noticed on inline file links). */
+  cursor: pointer;
 }
 
 /* Inline images (paste/drop → R2). Constrain to the column; a selected image
@@ -283,10 +287,17 @@
   text-decoration: none;
 }
 
-/* Mention suggestion popup */
+/* Mention suggestion popup.
+   FIXED, not absolute: the popup is appended to <body> but placed from
+   getBoundingClientRect(), which is VIEWPORT-relative — as `absolute` its coords
+   were read against the document, so on a scrolled page it landed off by exactly
+   the scroll offset. `fixed` is the coordinate space the numbers were always in.
+   z-index is the portaled-panel tier (--z-float), where every other body-level
+   typeahead already lives; it used to sit at 50, tying with the in-page item "⋯"
+   kebab and bleeding through it. See the layer scale in globals.css. */
 .ledgr-mention-popup {
-  position: absolute;
-  z-index: 50;
+  position: fixed;
+  z-index: var(--z-float, 60);
   min-width: 12rem;
   max-height: 16rem;
   overflow-y: auto;

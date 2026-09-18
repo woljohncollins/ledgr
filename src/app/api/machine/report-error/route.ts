@@ -4,13 +4,13 @@
 // jobs that don't run on Vercel. Cron scope, same door as the other
 // machine endpoints (ADR-004).
 import { NextResponse } from "next/server";
-import { verifyMachineToken } from "@/lib/auth/machine";
+import { verifyMachineRequest } from "@/lib/auth/credentials";
 import { captureError } from "@/lib/log";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
-  const identity = verifyMachineToken(
+  const identity = await verifyMachineRequest(
     request.headers.get("authorization"),
     "cron"
   );

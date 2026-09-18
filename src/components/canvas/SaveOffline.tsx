@@ -28,14 +28,25 @@ async function exportLeg(): Promise<LegState> {
       };
     }
     if (!res.ok) return { phase: "fail", detail: `export failed (${res.status})` };
+    // errors/remaining are counts, not arrays (ExportRunResult). This read used
+    // to be `errors.length` on a number, so the failure branch never fired.
     const result = (await res.json()) as {
       exported?: number;
-      errors?: unknown[];
+      errors?: number;
+      remaining?: number;
     };
-    if (result.errors && result.errors.length > 0) {
-      return { phase: "fail", detail: `export ran with ${result.errors.length} error(s)` };
+    if (result.errors && result.errors > 0) {
+      return { phase: "fail", detail: `export ran with ${result.errors} error(s)` };
     }
-    return { phase: "ok", detail: `exported to OneDrive ✓ (${result.exported ?? 0} item(s))` };
+    // A run stops at its time budget, so a large backlog finishes over several
+    // runs. Say so rather than implying OneDrive is fully caught up.
+    const queued = result.remaining
+      ? `, ${result.remaining} still queued`
+      : "";
+    return {
+      phase: "ok",
+      detail: `exported to OneDrive ✓ (${result.exported ?? 0} item(s)${queued})`,
+    };
   } catch {
     return { phase: "fail", detail: "export unreachable (offline?)" };
   }
@@ -50,7 +61,15 @@ async function pinLeg(itemId: string): Promise<LegState> {
     const res = await fetch(printUrl, { cache: "no-store" });
     if (!res.ok) return { phase: "fail", detail: `fetch failed (${res.status})` };
     const html = await res.text();
-    const headers = { "Content-Type": "text/html; charset=utf-8" };
+    // Date is stamped so public/offline.html can say "saved Aug 10" per row —
+    // a hand-built Response carries no Date of its own. The offline directory
+    // filters pins on the /items/{id}/print pathname, so changing what this
+    // function pins (a query param, a different route) silently empties that
+    // list; scripts/verify-offline-landing.mts guards the pair.
+    const headers = {
+      "Content-Type": "text/html; charset=utf-8",
+      Date: new Date().toUTCString(),
+    };
     const cache = await caches.open(PIN_CACHE);
     await cache.put(printUrl, new Response(html, { headers }));
     await cache.put(`/items/${itemId}`, new Response(html, { headers }));

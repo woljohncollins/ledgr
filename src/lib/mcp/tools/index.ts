@@ -16,11 +16,14 @@ import { getSettings } from "@/lib/settings";
 import { ItemError } from "@/lib/items";
 import { captureError } from "@/lib/log";
 import { attachmentTools } from "./attachments";
+import { calendarTools } from "./calendar";
 import { contextTools, LIVE_CONTEXT_TOOL_NAMES } from "./context";
 import { dashboardTools } from "./dashboards";
 import { itemTools } from "./items";
 import { MEMORY_TOOL_NAMES, memoryTools } from "./memory";
+import { recordTools } from "./records";
 import { relationTools } from "./relations";
+import { taskTools } from "./tasks";
 import { templateTools } from "./templates";
 import { typeTools } from "./types";
 import { viewTools } from "./views";
@@ -32,7 +35,10 @@ export { MEMORY_TOOL_NAMES };
 
 const TOOLS: McpTool[] = [
   ...itemTools,
+  ...taskTools,
+  ...recordTools,
   ...attachmentTools,
+  ...calendarTools,
   ...typeTools,
   ...relationTools,
   ...viewTools,
@@ -96,7 +102,10 @@ export async function callTool(
       }
     }
     const payload = await tool.handler(ownerId, a);
-    return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
+    // A handler that returns a string has already rendered its own wire format
+    // (the compact memory-stump index, ADR-230). Don't re-encode it as JSON.
+    const text = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
+    return { content: [{ type: "text", text }] };
   } catch (err) {
     if (err instanceof ItemError) return toolError(err.message);
     const correlationId = crypto.randomUUID();

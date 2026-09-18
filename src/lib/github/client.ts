@@ -8,8 +8,16 @@
 //
 // Same posture as the Graph/Todoist clients: a typed error distinguishes "never
 // configured" (visible, benign) from "GitHub said no" (a real failure to
-// surface). When GITHUB_TOKEN is unset the Changelog page shows a "not
-// configured" note instead of crashing.
+// surface).
+//
+// READS NEED NO TOKEN (2026-09-12). GitHub serves a public repository's
+// commits, compares and file contents anonymously (60 requests an hour per
+// address, and every read here is cached for a minute or for ever), so the
+// Changelog and the "am I behind?" check work on a fresh install with nothing
+// configured. Only WRITES — the satellite fork merge and the collab-notes
+// commits — need GITHUB_TOKEN, and those still say "not configured" without
+// one. A private repository read without a token fails as a plain 404, which
+// surfaces as "unknown", never as "current".
 
 const API = "https://api.github.com";
 const API_VERSION = "2022-11-28";
@@ -26,7 +34,8 @@ export class GithubError extends Error {
 }
 
 export type GithubConfig = {
-  token: string;
+  // Null when GITHUB_TOKEN is unset: reads go out anonymously, writes refuse.
+  token: string | null;
   // owner/repo, e.g. "strategicli/ledgr".
   repo: string;
   // Branch whose commit history feeds the Changelog (the deploy branch).
@@ -39,13 +48,11 @@ export type GithubConfig = {
   notesPath: string;
 };
 
-// Null when GITHUB_TOKEN is unset; callers surface "not configured" rather than
-// crash (the storage/Graph posture). A classic PAT or fine-grained token with
-// Contents read+write on the repo covers both the changelog reads and the notes
-// commits.
+// Always returns a config: reads work without a token. A classic PAT or
+// fine-grained token with Contents read+write on the repo is what the notes
+// commits (and a satellite's fork merge) need; see hasGithubToken.
 export function getGithubConfig(): GithubConfig | null {
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) return null;
+  const token = process.env.GITHUB_TOKEN || null;
   const repo = process.env.GITHUB_REPO || "strategicli/ledgr";
   const branch = process.env.GITHUB_BRANCH || "main";
   const notesBranch = process.env.GITHUB_NOTES_BRANCH || branch;
@@ -53,12 +60,26 @@ export function getGithubConfig(): GithubConfig | null {
   return { token, repo, branch, notesBranch, notesPath };
 }
 
+/** True when writes are possible. Reads never need this. */
+export function hasGithubToken(): boolean {
+  return !!process.env.GITHUB_TOKEN;
+}
+
 function requireConfig(): GithubConfig {
   const cfg = getGithubConfig();
   if (!cfg) {
-    throw new GithubError("GitHub not configured (GITHUB_TOKEN unset)", "not_configured");
+    throw new GithubError("GitHub not configured", "not_configured");
   }
   return cfg;
+}
+
+/** For writes: the config, with a token, or the typed "not configured" error. */
+function requireToken(): GithubConfig & { token: string } {
+  const cfg = requireConfig();
+  if (!cfg.token) {
+    throw new GithubError("GitHub writes need GITHUB_TOKEN", "not_configured");
+  }
+  return { ...cfg, token: cfg.token };
 }
 
 type FetchOpts = RequestInit & { revalidate?: number | false };
@@ -71,7 +92,7 @@ async function gh(cfg: GithubConfig, path: string, opts: FetchOpts = {}): Promis
   return fetch(`${API}${path}`, {
     ...init,
     headers: {
-      authorization: `Bearer ${cfg.token}`,
+      ...(cfg.token ? { authorization: `Bearer ${cfg.token}` } : {}),
       accept: "application/vnd.github+json",
       "x-github-api-version": API_VERSION,
       ...headers,
@@ -238,7 +259,7 @@ export async function readNotes(): Promise<CollabNotes> {
 
 // Ensures the notes branch exists, creating it from the deploy branch's head if
 // not. A no-op when notes live on the deploy branch (the default).
-async function ensureNotesBranch(cfg: GithubConfig): Promise<void> {
+async function ensureNotesBranch(cfg: GithubConfig & { token: string }): Promise<void> {
   if (cfg.notesBranch === cfg.branch) return;
   const ref = await gh(cfg, `/repos/${cfg.repo}/git/ref/heads/${encodeURIComponent(cfg.notesBranch)}`, {
     revalidate: 0,
@@ -267,7 +288,7 @@ export async function writeNotes(
   priorSha: string | null,
   authorEmail: string
 ): Promise<{ sha: string }> {
-  const cfg = requireConfig();
+  const cfg = requireToken();
   await ensureNotesBranch(cfg);
   // priorSha drives optimistic concurrency for normal edits. When it's null
   // (first write, or just after the notes branch was created carrying the file
@@ -289,6 +310,158 @@ export async function writeNotes(
     }
   );
   return { sha: data.content.sha };
+}
+
+// ── Updates (is this deploy behind upstream?) ─────────────────────────────────
+//
+// A satellite instance deploys from a fork, so it only receives a change when
+// that fork is synced with upstream. These two calls are the read and the write
+// of that: how far behind am I, and pull the latest.
+//
+// Both are deliberately tolerant. An instance with no GITHUB_TOKEN, no Vercel
+// git metadata, or a commit upstream has never heard of still renders a page
+// that says so, because "I can't tell" and "you are behind" must never look the
+// same to someone deciding whether to press a button.
+
+export type UpdateCommit = {
+  sha: string;
+  shortSha: string;
+  subject: string;
+  authorName: string;
+  date: string;
+  url: string;
+};
+
+export type CodeStatus =
+  | { state: "not_configured"; touchesSchema: false }
+  | { state: "source"; touchesSchema: false }
+  | { state: "unknown"; detail: string; touchesSchema: false }
+  | { state: "current"; touchesSchema: false }
+  | {
+      state: "behind";
+      count: number;
+      commits: UpdateCommit[];
+      // True when the pending update adds or changes anything under drizzle/,
+      // i.e. it carries a schema change. This is the flag that decides whether
+      // a non-builder is allowed to apply it (see resolveApplicability).
+      touchesSchema: true | false;
+      // GitHub caps a compare at 300 files / 250 commits; when it truncates,
+      // touchesSchema is a floor rather than a certainty and the UI says so.
+      truncated: boolean;
+    };
+
+type CompareResponse = {
+  status: "diverged" | "ahead" | "behind" | "identical";
+  ahead_by: number;
+  behind_by: number;
+  total_commits: number;
+  commits: CommitListItem[];
+  files?: { filename: string }[];
+};
+
+/**
+ * How far is the running commit behind upstream's branch head?
+ *
+ * Compares WITHIN the upstream repo (runningSha...branch) rather than across
+ * repos: a synced fork's commits are upstream's own commits, so the running sha
+ * is already a ref upstream can resolve. When it can't — a fork that has
+ * diverged, or a commit that never reached upstream — the compare 404s and this
+ * reports "unknown" instead of guessing.
+ */
+export async function getCodeStatus(
+  runningSha: string | null,
+  upstreamRepo: string,
+  branch: string,
+  isSatellite: boolean
+): Promise<CodeStatus> {
+  if (!isSatellite) return { state: "source", touchesSchema: false };
+  const cfg = getGithubConfig();
+  if (!cfg) return { state: "not_configured", touchesSchema: false };
+  if (!runningSha) {
+    return {
+      state: "unknown",
+      detail: "This deploy reports no commit sha (running outside Vercel?).",
+      touchesSchema: false,
+    };
+  }
+
+  let cmp: CompareResponse;
+  try {
+    cmp = await ghJson<CompareResponse>(
+      cfg,
+      `/repos/${upstreamRepo}/compare/${encodeURIComponent(runningSha)}...${encodeURIComponent(branch)}`,
+      { revalidate: 60 }
+    );
+  } catch (err) {
+    return {
+      state: "unknown",
+      detail: err instanceof GithubError ? err.message : String(err),
+      touchesSchema: false,
+    };
+  }
+
+  if (cmp.ahead_by === 0) return { state: "current", touchesSchema: false };
+
+  const files = cmp.files ?? [];
+  const truncated = cmp.commits.length < cmp.ahead_by || files.length >= 300;
+  return {
+    state: "behind",
+    count: cmp.ahead_by,
+    commits: cmp.commits
+      .slice()
+      .reverse() // compare returns oldest-first; the page reads newest-first
+      .map((item) => {
+        const entry = toChangelogEntry(item);
+        return {
+          sha: entry.sha,
+          shortSha: entry.shortSha,
+          subject: entry.subject,
+          authorName: entry.authorName,
+          date: entry.date,
+          url: entry.url,
+        };
+      }),
+    touchesSchema: files.some((f) => f.filename.startsWith("drizzle/")),
+    truncated,
+  };
+}
+
+export type ApplyUpdateResult = {
+  mergeType: "fast-forward" | "merge" | "none";
+  message: string;
+};
+
+/**
+ * Pull upstream into this instance's fork — GitHub's own "Sync fork" button,
+ * which is a fast-forward when the fork has no commits of its own.
+ *
+ * Pushing to the fork's deploy branch is what triggers that instance's Vercel
+ * build, so this call IS the deploy. It needs a token with Contents: write on
+ * the FORK (the same GITHUB_TOKEN the changelog uses, when that token is the
+ * instance owner's; LEDGR_UPDATE_TOKEN overrides it).
+ */
+export async function applyCodeUpdate(
+  forkRepo: string,
+  branch: string
+): Promise<ApplyUpdateResult> {
+  const cfg = requireConfig();
+  const token = process.env.LEDGR_UPDATE_TOKEN || cfg.token;
+  if (!token) {
+    throw new GithubError("Pulling an update into a fork needs GITHUB_TOKEN or LEDGR_UPDATE_TOKEN", "not_configured");
+  }
+  const data = await ghJson<{ merge_type?: string; message?: string }>(
+    { ...cfg, token },
+    `/repos/${forkRepo}/merge-upstream`,
+    { method: "POST", body: JSON.stringify({ branch }) }
+  );
+  const mergeType = data.merge_type;
+  return {
+    mergeType:
+      mergeType === "fast-forward" || mergeType === "merge" || mergeType === "none"
+        ? mergeType
+        : "none",
+    message: data.message ?? "",
+  };
 }
 
 // ── Health canary ─────────────────────────────────────────────────────────────

@@ -2,8 +2,9 @@
 // 2026-06-28). Extracted from CaptureModal (Slice 3) so it can be rendered both
 // inside the global capture dialog AND inline on the Inbox ("＋ details" on the
 // slim capture box). Defaults to "task" — the overwhelmingly common capture —
-// honoring the last-used type per browser. Every capture lands in the Inbox
-// (inbox: true) for deliberate triage (ADR-010); the type just seeds the item.
+// honoring the last-used type per browser. A capture names its arrival path
+// (source: "quick_capture") and the owner's Capture routing says where it lands,
+// which is the Inbox for deliberate triage unless they changed it (ADR-249).
 //
 // task → Tyler's shared AddTaskCard (NL-highlighted title + chip row +
 // #project/@person + destination). Any other type → a lean same-styled
@@ -135,7 +136,7 @@ function SimpleCapture({
     const raw = title.trim();
     if (!raw || busy) return;
     setBusy(true);
-    const body: Record<string, unknown> = { type, title: raw, inbox: true };
+    const body: Record<string, unknown> = { type, title: raw, source: "quick_capture" };
     if (description.trim()) body.body = { format: "markdown", text: description.trim() };
     try {
       const res = await fetch("/api/items", {

@@ -7,6 +7,7 @@ import { randomBytes } from "node:crypto";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { getDb } from "@/db";
 import { items, shareTokens } from "@/db/schema";
+import type { Theme } from "@/lib/settings";
 
 // 24 random bytes (~32 base64url chars, 192 bits) — unguessable, the security
 // boundary for an unauthenticated link (same posture as the machine tokens).
@@ -15,10 +16,13 @@ function newToken(): string {
 }
 
 // Per-link render options, stored on the token so the setting travels with the
-// URL (the recipient can't change it). `showIcons` toggles type-aware @-mention
-// icons on the shared/printed document; absent means on.
+// URL. `showIcons` toggles type-aware @-mention icons on the shared/printed
+// document; absent means on. `theme` is the look the page OPENS in (absent
+// means the owner's app theme at render time); the recipient can switch it
+// from the page's own Appearance control, which is remembered in their browser.
 export type ShareOptions = {
   showIcons?: boolean;
+  theme?: Theme;
 };
 
 export type ShareTokenRow = {
