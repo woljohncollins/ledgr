@@ -2,6 +2,36 @@
 
 The live, near-term work queue. Start here each session. When you finish a slice, move it to "Recently done," pull the next item up, and check its box in `roadmap.md`.
 
+## ✅ DONE — iPhone PWA: top under the status bar, bottom bar vanishing; bar reorder by drag (2026-09-19, non-core)
+
+Reported from the installed iOS app: icons at the top of the screen sat under
+the status bar, and the bottom bar was sometimes gone or looked stretched.
+
+- **Top.** The status bar is `black-translucent` and the viewport is
+  `viewport-fit=cover`, so an installed launch paints under the clock, and
+  nothing padded for `env(safe-area-inset-top)`. `globals.css` now publishes
+  `--safe-top`/`--safe-bottom` and pads `<body>` by the top inset; the fixed
+  overlays that don't inherit it (the item modal and its loading shell, the
+  Build hamburger and drawer, upload/type-builder toasts, the comment popover,
+  the outline's sticky layer, NavProgress) add it themselves.
+- **Bottom, hidden.** The nav bar hides while the editor is focused
+  (`body[data-editing]`). iOS's keyboard dismiss button hides the keyboard
+  WITHOUT blurring the editor, so the bar never came back. `useKeyboardVisible`
+  (`useKeyboardInset.ts`) watches the visual viewport, and the editor blurs
+  itself when the keyboard closes while focused.
+- **Bottom, stretched.** While hidden the Launcher's grid measured 0, which
+  made the CLOSED position `translateY(0)`: fully open. It re-entered as the
+  whole drawer sliding shut. The measurer now ignores 0. Installed, the
+  document also stops rubber-banding (`overscroll-behavior-y: none` under
+  `display-mode: standalone`), which dragged the fixed bars with it.
+- **Reorder.** Hold an icon on the bottom bar and drag sideways
+  (`ReorderableStrip`, wired in NavShell). The move is written to
+  `mobileNavSlots` as a permutation of the slots on the bar only, so hidden
+  or off-bar slots keep their places; a phone that mirrored desktop gets its
+  own list on the first drag, same as the editor's custom mode. Home is locked.
+
+Not verified on a real iPhone yet; the insets are 0 in every desktop browser.
+
 ## ✅ FIXED — "signed in, but not recognized" had no way out (2026-09-19, non-core)
 
 Reported from a phone: signing in with the wrong Google identity landed on the

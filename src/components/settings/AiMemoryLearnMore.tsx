@@ -48,7 +48,7 @@ export default function AiMemoryLearnMore() {
 
       {open && (
         <div
-          className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 px-3 py-3 sm:px-6 sm:py-8"
+          className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 px-3 pb-3 pt-[calc(0.75rem+var(--safe-top))] sm:px-6 sm:py-8"
           role="dialog"
           aria-modal="true"
           aria-label="How AI Memory works"

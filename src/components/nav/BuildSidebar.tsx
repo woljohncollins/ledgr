@@ -244,7 +244,7 @@ export default function BuildSidebar({
         type="button"
         onClick={() => setDrawerOpen(true)}
         aria-label="Open Build menu"
-        className="fixed left-3 top-3 z-40 flex items-center gap-2 rounded-lg border border-[var(--accent)] bg-[var(--accent)]/15 px-2.5 py-1.5 text-sm font-semibold text-[var(--accent)] shadow-[0_0_14px_-3px_var(--accent)] backdrop-blur sm:hidden"
+        className="fixed left-3 top-[calc(0.75rem+var(--safe-top))] z-40 flex items-center gap-2 rounded-lg border border-[var(--accent)] bg-[var(--accent)]/15 px-2.5 py-1.5 text-sm font-semibold text-[var(--accent)] shadow-[0_0_14px_-3px_var(--accent)] backdrop-blur sm:hidden"
       >
         <HamburgerIcon />
         Build
@@ -253,7 +253,7 @@ export default function BuildSidebar({
         <div className="fixed inset-0 z-50 sm:hidden" role="dialog" aria-modal="true" aria-label="Build menu">
           <div className="absolute inset-0 bg-black/60" onClick={() => setDrawerOpen(false)} />
           <div
-            className="absolute inset-y-0 left-0 border-r border-neutral-800 bg-neutral-900"
+            className="absolute inset-y-0 left-0 border-r border-neutral-800 bg-neutral-900 pt-[var(--safe-top)]"
             style={{ width: BUILD_SIDEBAR_W }}
           >
             <SidebarContent

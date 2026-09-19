@@ -60,7 +60,7 @@ export default function TemplateApplyDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 px-4 py-10"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 px-4 pb-10 pt-[calc(2.5rem+var(--safe-top))]"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget && !busy) onClose();
       }}

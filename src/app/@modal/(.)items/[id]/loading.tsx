@@ -6,7 +6,7 @@
 export default function ItemModalLoading() {
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 px-3 py-6 sm:px-6 sm:py-12"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 px-3 pb-6 pt-[calc(1.5rem+var(--safe-top))] sm:px-6 sm:py-12"
       aria-hidden
     >
       <div className="flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-lg border border-line bg-[var(--background)] shadow-2xl">

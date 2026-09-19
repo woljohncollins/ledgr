@@ -132,7 +132,7 @@ export default function NavProgress() {
   }, [begin, clearWorkTimers]);
 
   return (
-    <div aria-hidden className="pointer-events-none fixed inset-x-0 top-0 z-[60] h-0.5">
+    <div aria-hidden className="pointer-events-none fixed inset-x-0 top-[var(--safe-top)] z-[60] h-0.5">
       <div
         className="h-full origin-left transition-[width,opacity] duration-200 ease-out"
         style={{

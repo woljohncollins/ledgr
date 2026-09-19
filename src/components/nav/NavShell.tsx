@@ -48,6 +48,7 @@ import AppBadgeSync from "@/components/pwa/AppBadgeSync";
 import CaptureModal from "@/components/capture/CaptureModal";
 import CommandPalette from "@/components/search/CommandPalette";
 import Launcher, { type LauncherTile } from "@/components/nav/Launcher";
+import ReorderableStrip from "@/components/nav/ReorderableStrip";
 import SyncPill from "@/components/nav/SyncPill";
 import { isBuildPath } from "@/lib/build-nav";
 import { NOTIFICATION_CENTER_ENABLED } from "@/lib/notifications-enabled";
@@ -57,6 +58,7 @@ import {
   RECOMMENDED_MOBILE_NAV_SLOTS,
   SEARCH_HREF,
   type NavDensity,
+  type NavSlotConfig,
   type NavPosition,
   type RailAnchor,
   type RailSize,
@@ -72,7 +74,7 @@ export type ShellDest = {
 };
 
 // A configured middle slot: one destination, or a named group of them.
-export type ShellSlot =
+export type ShellSlot = (
   | ({ kind: "destination" } & ShellDest)
   | {
       kind: "tools";
@@ -80,7 +82,13 @@ export type ShellSlot =
       icon: string;
       count: number | null;
       children: ShellDest[];
-    };
+    }
+) & {
+  // Where this slot sits in the stored NavSlotConfig[] it was resolved from
+  // (Nav.tsx). Lets the phone bar's drag-to-reorder write the same move back
+  // to settings without a second lookup. Unset on the locked Home slot.
+  configIndex?: number;
+};
 
 // Home is always the first slot and never configurable; prepended at render.
 const HOME_SLOT: ShellSlot = {
@@ -134,6 +142,7 @@ const RAIL_NEXT_LABEL: Record<RailSize, string> = {
 export default function NavShell({
   slots,
   mobileSlots,
+  mobileNavConfig = [],
   unreadCount,
   typeOptions,
   buildTypes,
@@ -147,6 +156,9 @@ export default function NavShell({
 }: {
   slots: ShellSlot[];
   mobileSlots: ShellSlot[];
+  // The stored slot list mobileSlots was resolved from (mobileNavSlots, or
+  // navSlots when the phone mirrors desktop): what a bar reorder writes back.
+  mobileNavConfig?: NavSlotConfig[];
   // Unread notification count: seeds the PWA app-icon badge + the More-menu link.
   unreadCount: number;
   typeOptions: { key: string; label: string }[];
@@ -468,10 +480,59 @@ export default function NavShell({
     slot,
     id: i === 0 ? "home" : `d${i}`,
   }));
-  const mobileBarSlots = [HOME_SLOT, ...mobileSlots].map((slot, i) => ({
+  // The phone bar reorders by hold-and-drag (ReorderableStrip): the order is
+  // local state so the bar follows the finger, then the same permutation is
+  // written to the stored phone list and the server re-resolves. Ids stay
+  // positional (m1..) so an open popover keyed by id closes cleanly on move.
+  // The override is keyed to the prop array it reordered: the server sends a
+  // fresh array on every refresh, so a stale override drops by itself.
+  type BarOrder = { base: ShellSlot[]; order: ShellSlot[] };
+  const [barOverride, setBarOverride] = useState<BarOrder | null>(null);
+  const mobileOrder =
+    barOverride && barOverride.base === mobileSlots ? barOverride.order : mobileSlots;
+  // The latest order for the commit on release (a ref, so the strip's
+  // onCommit doesn't read a snapshot from before the last move).
+  const barOrderRef = useRef<BarOrder | null>(null);
+  const mobileBarSlots = [HOME_SLOT, ...mobileOrder].map((slot, i) => ({
     slot,
     id: i === 0 ? "home" : `m${i}`,
   }));
+  // Bar indices include Home at 0; the order state holds the slots after it.
+  // from/to index the rendered order, which is exactly `mobileOrder` here.
+  const moveBarSlot = (from: number, to: number) => {
+    if (from < 1 || to < 1) return;
+    const next = [...mobileOrder];
+    const [moved] = next.splice(from - 1, 1);
+    if (!moved) return;
+    next.splice(to - 1, 0, moved);
+    const value = { base: mobileSlots, order: next };
+    barOrderRef.current = value;
+    setOpenTools(null);
+    setBarOverride(value);
+  };
+  const commitBarOrder = async () => {
+    const latest = barOrderRef.current;
+    if (!latest || latest.base !== mobileSlots) return;
+    // Only the slots ON the bar were permuted: swap them among the positions
+    // they already occupy in the stored list, leaving everything hidden (the
+    // Inbox when it's empty) or beyond the bar exactly where it was.
+    const bar = latest.order.slice(0, RECOMMENDED_MOBILE_NAV_SLOTS - 1);
+    const idx = bar.map((s) => s.configIndex);
+    if (!bar.length || idx.some((i) => i === undefined || !mobileNavConfig[i])) return;
+    const order = idx as number[];
+    const positions = [...order].sort((a, b) => a - b);
+    if (positions.every((p, k) => p === order[k])) return;
+    const next = mobileNavConfig.slice();
+    positions.forEach((pos, k) => {
+      next[pos] = mobileNavConfig[order[k]];
+    });
+    await fetch("/api/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mobileNavSlots: next }),
+    }).catch(() => {});
+    router.refresh();
+  };
 
   // The pull-up launcher holds every destination — the owner's full nav set (a
   // tools group expands to its children) plus the built-in extras — EXCEPT the
@@ -575,7 +636,7 @@ export default function NavShell({
     left: "50%",
     transform: "translateX(-50%)",
     bottom: "calc(4.75rem + env(safe-area-inset-bottom))",
-    maxHeight: "calc(100vh - 6rem - env(safe-area-inset-bottom))",
+    maxHeight: "calc(100vh - 6rem - env(safe-area-inset-bottom) - var(--safe-top))",
   };
   // Every tools/favorites popover portals to <body>. On the mobile bar it has to:
   // the pill has `backdrop-blur` and a centering transform, and each makes a
@@ -981,11 +1042,16 @@ export default function NavShell({
           container here can't clip them. Belt-and-suspenders with the mobile
           overflow-x guard (globals.css): even a pathological width keeps every
           control reachable instead of pushing Search/New off the edge. */}
-      <div className="no-scrollbar flex min-w-0 flex-1 items-center justify-center gap-1 overflow-x-auto">
-        {mobileBarSlots.slice(0, RECOMMENDED_MOBILE_NAV_SLOTS).map(({ slot, id }) =>
-          renderSlot(slot, id, pillSlotMobile, slotActive(slot), "mobile")
-        )}
-      </div>
+      <ReorderableStrip
+        className="no-scrollbar flex min-w-0 flex-1 items-center justify-center gap-1 overflow-x-auto"
+        items={mobileBarSlots.slice(0, RECOMMENDED_MOBILE_NAV_SLOTS).map(({ slot, id }) => ({
+          id,
+          locked: id === "home",
+          node: renderSlot(slot, id, pillSlotMobile, slotActive(slot), "mobile"),
+        }))}
+        onMove={moveBarSlot}
+        onCommit={() => void commitBarOrder()}
+      />
       <div className="flex shrink-0 items-center gap-1">{mobileTrailingControls}</div>
     </div>
   );

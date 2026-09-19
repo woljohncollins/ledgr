@@ -91,7 +91,7 @@ export default function CommentPopover({
         "rounded-card border border-line-strong bg-surface-2 p-2 shadow-xl shadow-black/40 " +
         (inGutter
           ? "absolute z-40 w-52"
-          : "fixed inset-x-3 top-16 z-[61] mx-auto max-w-md")
+          : "fixed inset-x-3 top-[calc(4rem+var(--safe-top))] z-[61] mx-auto max-w-md")
       }
     >
       {editable ? (
