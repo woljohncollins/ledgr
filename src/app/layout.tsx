@@ -52,6 +52,17 @@ export const metadata: Metadata = {
     title: "Ledgr",
     statusBarStyle: "black-translucent",
   },
+  // `appleWebApp.capable` renders the STANDARDISED <meta name="mobile-web-app-
+  // capable">; Next 16 no longer emits the apple-prefixed twin. iOS only treats
+  // a home-screen launch as truly standalone when it reads either that meta or
+  // the manifest `display` member, and when it doesn't,
+  // env(safe-area-inset-bottom) resolves to 0 and the bottom bar renders under
+  // the home indicator (reported on an iPhone; the same build is fine on
+  // Android). Emitting both names costs nothing and is ignored wherever the
+  // standard one already works.
+  other: {
+    "apple-mobile-web-app-capable": "yes",
+  },
 };
 
 // The title-bar color follows the owner's theme (settings.theme), so a light

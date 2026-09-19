@@ -341,7 +341,11 @@ body {
    fixed bottom clearance; the docked top bar / side rail padding only applies
    at the sm+ breakpoint where those positions render. */
 body {
-  padding-bottom: 6rem;
+  /* The bar row pads itself out by env(safe-area-inset-bottom), so on a device
+     with a home indicator the bar is that much TALLER than the flat 6rem this
+     used to reserve — and the last row of a list ended up behind it. Reserve
+     the inset here too so the clearance always matches the rendered bar. */
+  padding-bottom: calc(6rem + env(safe-area-inset-bottom));
 }
 @media (min-width: 640px) {
   body {

@@ -46,7 +46,8 @@ export type LauncherTile = {
 // measured grid height, so it hides everything below the grip + bar row via
 // calc(). Must roughly track the grip + bar row's rendered height; the precise
 // measured value takes over in the first layout effect.
-const CLOSED_FALLBACK = "translateY(calc(100% - 4.75rem - env(safe-area-inset-bottom)))";
+const CLOSED_FALLBACK =
+  "translateY(calc(100% - 4.75rem - max(0.5rem, env(safe-area-inset-bottom))))";
 
 // Release faster than this (px/ms) counts as a flick and wins over position.
 const FLICK_VELOCITY = 0.4;
@@ -262,8 +263,11 @@ export default function Launcher({
         </button>
         {/* The bar row owns the safe-area clearance: closed it keeps the icons
             above the home indicator, open the same padding reads as the gap
-            between the bar and the grid. */}
-        <div className="pb-[env(safe-area-inset-bottom)]">{barRow}</div>
+            between the bar and the grid. The max() is a floor: if iOS reports
+            the inset as 0 (a home-screen launch it hasn't treated as truly
+            standalone) the raw env() left the icons flush against the screen
+            edge, half-swallowed by the home indicator. */}
+        <div className="pb-[max(0.5rem,env(safe-area-inset-bottom))]">{barRow}</div>
         {/* The revealed section. Its measured height IS the drag travel, so
             the drawer is exactly as tall as its contents. Inert while closed
             so offscreen tiles can't take focus or clicks. max-h is a safety
