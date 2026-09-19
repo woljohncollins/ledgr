@@ -2,6 +2,33 @@
 
 The live, near-term work queue. Start here each session. When you finish a slice, move it to "Recently done," pull the next item up, and check its box in `roadmap.md`.
 
+## ✅ FIXED — "signed in, but not recognized" had no way out (2026-09-19, non-core)
+
+Reported from a phone: signing in with the wrong Google identity landed on the
+"Signed in, but not recognized" screen, and its **Sign in as a different user**
+link did nothing — every tap looked like the page reloading itself.
+
+It could not have worked. The link pointed at `/sign-in`, and that session is
+VALID, so Clerk's `<SignIn/>` redirects an already-signed-in visitor straight
+back to `/` — which re-renders the same screen. `src/lib/owner.ts` and
+`_today-home.tsx` both carry comments saying a redirect to `/sign-in` would loop
+in this state; the link the screen actually rendered did exactly that. With Nav
+drawing nothing without an owner, there is no user menu either, so the instance
+was a closed room: no nav, no content, and the one visible exit was a no-op.
+
+The fix: end the session instead of asking for a new one. `useSignOut()` joins
+the client auth seam (`src/lib/auth/client.ts` — the only file allowed to import
+Clerk on the client), and `SwitchAccountButton` (`src/components/auth/`) replaces
+the link with a button that signs out and lands on `/sign-in` signed out, where
+the sign-in form actually renders. Guarded by the publishable-key check, like
+Nav's NavAuthHeal, so a keyless/local build with no ClerkProvider doesn't call
+the hook. Fourth door in the ADR-184/203/216 family, and the first one where the
+chrome was right and the escape hatch was the broken part.
+
+Not done: the same dead end exists on every OTHER route (nav renders nothing, so
+only `/` offers the exit) and on `/connect/launchpad`, which says "close this
+window." Mounting the escape in Nav for the `unrecognized` state would cover both.
+
 ## ✅ SHIPPED — search history, saved searches, palette memory; Sepia prose color (2026-09-18, non-core, branch `feat/search-history-and-sepia-prose`)
 
 Three search fixes. Quick search (⌘K) now keeps its last query and results across

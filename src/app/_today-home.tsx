@@ -9,6 +9,7 @@
 // `next build` runs the typecheck, it broke every deploy from main. Not a route:
 // the `_` prefix keeps this out of the router.
 import Link from "next/link";
+import SwitchAccountButton from "@/components/auth/SwitchAccountButton";
 import QuickCapture from "@/components/today/QuickCapture";
 import PushToggle from "@/components/pwa/PushToggle";
 import RollOverdueButton from "@/components/today/RollOverdueButton";
@@ -182,9 +183,15 @@ export default async function TodayHome() {
           Nothing is wrong with your data. The session just isn&rsquo;t linked to
           the owner record, so every page will render empty until it is.
         </p>
-        <Link href="/sign-in" className="text-sm text-[var(--accent)] hover:underline">
-          Sign in as a different user
-        </Link>
+        {/* A button, not a link: /sign-in cannot end a session, and Clerk
+            bounces an already-signed-in visitor off it back to "/" (the
+            "clicking it just reloads the page" report, 2026-09-19). Rendered
+            only with Clerk mounted — AppAuthProvider skips ClerkProvider when
+            there's no publishable key, and the hook inside would throw. Same
+            guard Nav uses before mounting NavAuthHeal. */}
+        {process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY ? (
+          <SwitchAccountButton />
+        ) : null}
       </main>
     );
   }
