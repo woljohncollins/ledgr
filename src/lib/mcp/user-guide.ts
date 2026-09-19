@@ -719,9 +719,18 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
 ## Search
 
 - **Command palette (Ctrl/⌘+K)** — the fast one. Items, pages, views, types,
-  Build sections and settings. A leading \`/type\` scopes it, as in \`/task budget\`.
+  saved searches, Build sections and settings. A leading \`/type\` scopes it, as
+  in \`/task budget\`. It remembers your last query: close it and reopen, and
+  your text and results are still there.
+- **Recent searches.** Both the palette (with the box empty) and \`/search\`
+  (before you've searched) show your last searches as clickable rows or chips,
+  so you can jump back into one without retyping it.
 - **Advanced search** (\`/search\`) — full text over titles and bodies with
   phrases, \`OR\`, and \`-exclusions\`, plus filters.
+- **Save search.** On \`/search\`, once you have a query or filters set, **Save
+  search** names and keeps the whole search (words, filters, and Tune
+  criteria). Saved searches sync across your devices, show as chips on
+  \`/search\` to restore or delete, and show up in the command palette too.
 - **Tune** — for when you half-remember something. Stack up what you recall
   (words, a rough date, a type, a person, a tag) and set **how sure you are about
   each piece separately**. Results rank by the total instead of filtering down to

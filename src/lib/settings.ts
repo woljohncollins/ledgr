@@ -433,6 +433,10 @@ export type UserSettings = {
   // Off by default, because the work needs tools that not every machine has:
   // yt-dlp, and Whisper for a video with no captions.
   youtubeTranscripts: { enabled: boolean };
+  // Saved searches (ADR-063 palette / /search): named snapshots of the full
+  // search state (q, filters, tuning criteria). Synced like everything else
+  // here. `state` is opaque to settings.ts — SearchClient owns its shape.
+  savedSearches: { id: string; name: string; state: Record<string, unknown> }[];
 };
 
 // The notification sources (ADR-129), in the order the settings UI lists them.
@@ -553,6 +557,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
   searchSynonyms: {},
   jobOwners: {},
   youtubeTranscripts: { enabled: false },
+  savedSearches: [],
 };
 
 export const SETTINGS_UUID_RE =
@@ -736,6 +741,32 @@ function parseSearchSynonyms(raw: unknown): Record<string, string[]> {
   return out;
 }
 
+export const SAVED_SEARCHES_CAP = 100;
+
+// Parse saved searches: id and name must be non-empty strings, state a plain
+// object (its shape is SearchClient's business, not settings.ts's — kept
+// permissive). Anything not an array yields the empty list.
+function parseSavedSearches(
+  raw: unknown
+): { id: string; name: string; state: Record<string, unknown> }[] {
+  if (!Array.isArray(raw)) return [];
+  const out: { id: string; name: string; state: Record<string, unknown> }[] = [];
+  for (const r of raw) {
+    if (!r || typeof r !== "object") continue;
+    const o = r as Record<string, unknown>;
+    const id = typeof o.id === "string" && o.id ? o.id : null;
+    const name = typeof o.name === "string" && o.name.trim() ? o.name.trim().slice(0, 80) : null;
+    const state =
+      o.state && typeof o.state === "object" && !Array.isArray(o.state)
+        ? (o.state as Record<string, unknown>)
+        : null;
+    if (!id || !name || !state) continue;
+    out.push({ id, name, state });
+    if (out.length >= SAVED_SEARCHES_CAP) break;
+  }
+  return out;
+}
+
 export function parseSettings(raw: unknown): UserSettings {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const highlightColor =
@@ -842,6 +873,7 @@ export function parseSettings(raw: unknown): UserSettings {
   const deskWorkspaces = parseDeskWorkspaces(r.deskWorkspaces);
   const searchSynonyms = parseSearchSynonyms(r.searchSynonyms);
   const jobOwners = parseJobOwners(r.jobOwners);
+  const savedSearches = parseSavedSearches(r.savedSearches);
   // Only an explicit `true` turns it on: an absent, partial or hand-edited blob
   // leaves the feature off, which is the safe answer on a machine without the
   // tools to do the work.
@@ -891,6 +923,7 @@ export function parseSettings(raw: unknown): UserSettings {
     searchSynonyms,
     jobOwners,
     youtubeTranscripts,
+    savedSearches,
   };
 }
 

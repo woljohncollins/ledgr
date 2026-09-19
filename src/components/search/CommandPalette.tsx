@@ -23,16 +23,24 @@ import {
   staticCommandEntries,
 } from "@/lib/command-index";
 import { parseTypeToken } from "@/components/search/type-token";
+import { pushSearchHistory, readSearchHistory } from "@/lib/search-history";
 
 type ItemHit = { id: string; title: string; type: string };
 type IndexData = {
   types: { key: string; label: string; icon: string | null }[];
   views: { id: string; name: string }[];
   templates: { id: string; name: string; type: string; prototypeItemId: string }[];
+  savedSearches: { id: string; name: string }[];
 };
 
 const EMPTY_GROUP_CAP = 6; // jump-list size per group before any query
 const QUERY_GROUP_CAP = 8; // matches shown per group while querying
+
+// The palette is unmounted/remounted on every open/close (NavShell renders it
+// conditionally), which resets React state each time. A module-scope variable
+// survives that remount (but not a full page reload), so reopening the palette
+// picks up right where it left off.
+let lastQuery = "";
 
 export default function CommandPalette({ onClose }: { onClose: () => void }) {
   const router = useRouter();
@@ -40,13 +48,19 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
   const mode: CommandMode = isBuildPath(pathname) ? "build" : "work";
 
   const inputRef = useRef<HTMLInputElement>(null);
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(lastQuery);
   const [items, setItems] = useState<ItemHit[]>([]);
   const [data, setData] = useState<IndexData | null>(null);
   const [active, setActive] = useState(0);
+  const [recent] = useState<string[]>(() => readSearchHistory());
+
+  useEffect(() => {
+    lastQuery = q;
+  }, [q]);
 
   useEffect(() => {
     inputRef.current?.focus();
+    inputRef.current?.select();
   }, []);
 
   // Pull the owner's dynamic entries (types/views/templates) once on open; the
@@ -152,6 +166,7 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
   const activeIndex = active < flat.length ? active : 0;
 
   const openResult = (r: CommandResult) => {
+    if (q.trim()) pushSearchHistory(q.trim());
     onClose();
     if (r.kind === "destination") router.push(r.href);
     // action results are not produced yet (the populate-later seam).
@@ -162,8 +177,9 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
   // query survives the jump. One function behind both doors: the footer button
   // and Enter-with-no-results.
   const goAdvanced = () => {
-    onClose();
     const query = q.trim();
+    if (query) pushSearchHistory(query);
+    onClose();
     router.push(query ? `/search?q=${encodeURIComponent(query)}` : "/search");
   };
 
@@ -213,6 +229,30 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
           <div className="flex items-center gap-1.5 border-b border-neutral-800 bg-neutral-950 px-4 py-1 text-[10px] font-semibold uppercase tracking-wider text-neutral-500">
             {parsed.type.label}
             {parsed.rest ? "" : " · type to filter"}
+          </div>
+        )}
+
+        {!q.trim() && recent.length > 0 && (
+          <div className="border-b border-neutral-800 py-1">
+            <p className="px-4 pb-0.5 pt-2 text-[10px] font-semibold uppercase tracking-wider text-neutral-600">
+              Recent searches
+            </p>
+            <ul>
+              {recent.map((r) => (
+                <li key={r}>
+                  <button
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      setQ(r);
+                    }}
+                    className="flex w-full items-center gap-2.5 px-4 py-2 text-left text-sm text-neutral-300 hover:bg-neutral-800 hover:text-neutral-100"
+                  >
+                    <NavGlyph icon="search" size={16} className="shrink-0 text-neutral-500" />
+                    <span className="min-w-0 flex-1 truncate">{r}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
           </div>
         )}
 

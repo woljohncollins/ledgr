@@ -90,13 +90,13 @@ check("matchScore: empty query scores 0 (passthrough)", matchScore("Anything", "
 const sample = [
   ...statics,
   ...dynamicCommandEntries(
-    { types: [{ key: "note", label: "Note", icon: "notes" }], views: [{ id: "v1", name: "My Views Board" }], templates: [] },
+    { types: [{ key: "note", label: "Note", icon: "notes" }], views: [{ id: "v1", name: "My Views Board" }], templates: [], savedSearches: [] },
     "work"
   ),
 ];
 const workRanked = rankCommands(sample, "data", "work");
 const buildRanked = rankCommands(
-  [...statics, ...dynamicCommandEntries({ types: [{ key: "note", label: "Note", icon: "notes" }], views: [], templates: [] }, "build")],
+  [...statics, ...dynamicCommandEntries({ types: [{ key: "note", label: "Note", icon: "notes" }], views: [], templates: [], savedSearches: [] }, "build")],
   "data",
   "build"
 );
@@ -104,15 +104,15 @@ check("rankCommands: 'data' finds Data Hygiene in both modes", workRanked.some((
 check("rankCommands: empty query is a passthrough (no filtering)", rankCommands(statics, "", "work").length === statics.length);
 check("rankCommands: unmatched entries drop out", rankCommands(statics, "qqzz", "work").length === 0);
 
-const work = dynamicCommandEntries({ types: [{ key: "note", label: "Note", icon: "notes" }], views: [], templates: [] }, "work");
-const build = dynamicCommandEntries({ types: [{ key: "note", label: "Note", icon: "notes" }], views: [], templates: [] }, "build");
+const work = dynamicCommandEntries({ types: [{ key: "note", label: "Note", icon: "notes" }], views: [], templates: [], savedSearches: [] }, "work");
+const build = dynamicCommandEntries({ types: [{ key: "note", label: "Note", icon: "notes" }], views: [], templates: [], savedSearches: [] }, "build");
 check("dynamic type href is the item list in Work", work[0].kind === "destination" && work[0].href === "/list/note");
 check("dynamic type href is the edit page in Build", build[0].kind === "destination" && build[0].href === "/build/types/note/edit");
 
 // A template has no builder route of its own; it opens its prototype item's
 // canvas (the templates index links the same way). Guards the 404 regression.
 const tmpl = dynamicCommandEntries(
-  { types: [], views: [], templates: [{ id: "t1", name: "Weekly note", type: "note", prototypeItemId: "i9" }] },
+  { types: [], views: [], templates: [{ id: "t1", name: "Weekly note", type: "note", prototypeItemId: "i9" }], savedSearches: [] },
   "build"
 );
 check("dynamic template href is the prototype item's canvas", tmpl[0].kind === "destination" && tmpl[0].href === "/items/i9");

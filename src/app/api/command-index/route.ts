@@ -4,6 +4,7 @@
 // command-index.ts and need no round-trip. Owner-scoped like every read.
 import { NextResponse } from "next/server";
 import { errorResponse, requireOwner } from "@/lib/api";
+import { getSettings } from "@/lib/settings";
 import { listTemplates } from "@/lib/templates";
 import { listTypes } from "@/lib/types";
 import { listViews } from "@/lib/views";
@@ -15,10 +16,11 @@ export async function GET() {
   if (owner instanceof NextResponse) return owner;
 
   try {
-    const [types, views, templates] = await Promise.all([
+    const [types, views, templates, settings] = await Promise.all([
       listTypes(),
       listViews(owner.id),
       listTemplates(owner.id),
+      getSettings(owner.id),
     ]);
     return NextResponse.json({
       types: types.map((t) => ({ key: t.key, label: t.label, icon: t.icon })),
@@ -29,6 +31,7 @@ export async function GET() {
         type: t.type,
         prototypeItemId: t.prototypeItemId,
       })),
+      savedSearches: settings.savedSearches.map((s) => ({ id: s.id, name: s.name })),
     });
   } catch (err) {
     return errorResponse(err);

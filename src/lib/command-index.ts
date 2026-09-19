@@ -20,6 +20,7 @@ export const COMMAND_GROUPS = [
   "Items",
   "Pages",
   "Views",
+  "Saved searches",
   "Types",
   "Build & Settings",
   "Actions",
@@ -127,6 +128,7 @@ export function dynamicCommandEntries(
       type: string;
       prototypeItemId: string;
     }[];
+    savedSearches: { id: string; name: string }[];
   },
   mode: CommandMode
 ): DestinationResult[] {
@@ -156,7 +158,15 @@ export function dynamicCommandEntries(
     href: `/items/${t.prototypeItemId}`,
     icon: "document",
   }));
-  return [...types, ...views, ...templates];
+  const savedSearches: DestinationResult[] = data.savedSearches.map((s) => ({
+    kind: "destination",
+    id: `saved-search:${s.id}`,
+    group: "Saved searches",
+    label: s.name,
+    href: `/search?saved=${s.id}`,
+    icon: "search",
+  }));
+  return [...types, ...views, ...templates, ...savedSearches];
 }
 
 // Match a query against a label. Higher is better; null means no match. Prefix
@@ -183,6 +193,7 @@ function groupWeight(group: CommandGroup, mode: CommandMode): number {
     Items: 30,
     Pages: 25,
     Views: 20,
+    "Saved searches": 18,
     Types: 10,
     "Build & Settings": 5,
     Actions: 0,
@@ -191,6 +202,7 @@ function groupWeight(group: CommandGroup, mode: CommandMode): number {
     "Build & Settings": 30,
     Types: 25,
     Views: 15,
+    "Saved searches": 12,
     Items: 10,
     Pages: 8,
     Actions: 0,
@@ -202,8 +214,8 @@ function groupWeight(group: CommandGroup, mode: CommandMode): number {
 // Build). Groups with no matches are simply skipped by the renderer.
 export function groupOrder(mode: CommandMode): CommandGroup[] {
   return mode === "build"
-    ? ["Build & Settings", "Types", "Views", "Items", "Pages", "Actions"]
-    : ["Items", "Pages", "Views", "Types", "Build & Settings", "Actions"];
+    ? ["Build & Settings", "Types", "Views", "Saved searches", "Items", "Pages", "Actions"]
+    : ["Items", "Pages", "Views", "Saved searches", "Types", "Build & Settings", "Actions"];
 }
 
 // Rank a set of entries against the query for a mode. With an empty query the

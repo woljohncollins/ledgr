@@ -2,6 +2,23 @@
 
 The live, near-term work queue. Start here each session. When you finish a slice, move it to "Recently done," pull the next item up, and check its box in `roadmap.md`.
 
+## ✅ SHIPPED — search history, saved searches, palette memory; Sepia prose color (2026-09-18, non-core, branch `feat/search-history-and-sepia-prose`)
+
+Three search fixes. Quick search (⌘K) now keeps its last query and results across
+open/close (module-scope variable in `CommandPalette.tsx`; the input is
+select-all on open so typing replaces). **Recent searches** (last 12, localStorage,
+`src/lib/search-history.ts`) show in the palette's empty state and on `/search`
+before anything is typed; a query is recorded when a result is opened, not on
+every keystroke. **Saved searches** live in `settings.savedSearches` as named
+snapshots of the full `/search` state (filters and Tune criteria included), saved
+with a "Save search" button, listed as chips on `/search`, and surfaced in the
+palette as a "Saved searches" group that deep-links to `/search?saved=<id>`.
+Sepia/Light body text: `markdown-editor.css` hardcoded dark-theme grays
+(`.ledgr-prose { color:#e5e5e5 }` and friends); they now use the `--ink*` /
+`--surface*` / `--line*` tokens, so every theme reads correctly (ADR-141). User
+guide updated. Skipped: a Clear-history control, keyboard nav over the recent
+rows, and re-theming the portaled slash/mention popups (still fixed dark chrome).
+
 ## ✅ SHIPPED — three additive MCP setup tools (2026-09-18, ADR-183 carve-out, branch `feat/mcp-setup-tools`)
 
 `update_type` gains `hidden` (hide a type from quick capture/+New/list tabs/nav

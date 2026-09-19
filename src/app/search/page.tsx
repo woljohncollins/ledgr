@@ -6,6 +6,7 @@ import { getDb } from "@/db";
 import { types } from "@/db/schema";
 import SearchClient from "@/components/search/SearchClient";
 import { resolveOwner } from "@/lib/owner";
+import { getSettings } from "@/lib/settings";
 import { compareTypeKeys } from "@/lib/type-order";
 import { listPersonOptions } from "@/lib/views";
 
@@ -14,20 +15,23 @@ export const dynamic = "force-dynamic";
 export default async function Search({
   searchParams,
 }: {
-  searchParams: Promise<{ q?: string }>;
+  searchParams: Promise<{ q?: string; saved?: string }>;
 }) {
   const owner = await resolveOwner();
   if (!owner) redirect("/sign-in");
 
   // Prefill from ?q= for the Discover "Search everything about this" handoff
-  // (ADR-127).
-  const initialQuery = (await searchParams).q ?? "";
+  // (ADR-127); ?saved=<id> deep-links a saved search (command palette).
+  const sp = await searchParams;
+  const initialQuery = sp.q ?? "";
+  const initialSavedId = sp.saved;
 
-  const [typeRows, people] = await Promise.all([
+  const [typeRows, people, settings] = await Promise.all([
     getDb()
       .select({ key: types.key, label: types.label, propertySchema: types.propertySchema })
       .from(types),
     listPersonOptions(owner.id),
+    getSettings(owner.id),
   ]);
   typeRows.sort((a, b) => compareTypeKeys(a.key, b.key));
 
@@ -77,6 +81,8 @@ export default async function Search({
         <div className="mt-6">
           <SearchClient
             initialQuery={initialQuery}
+            initialSavedSearches={settings.savedSearches}
+            initialSavedId={initialSavedId}
             types={typeRows.map((t) => ({ value: t.key, label: t.label }))}
             people={people.map((p) => ({
               value: p.id,

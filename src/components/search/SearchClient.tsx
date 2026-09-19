@@ -15,6 +15,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { parseTypeToken } from "@/components/search/type-token";
 import { parseFuzzyWhen } from "@/lib/nl-date";
+import { pushSearchHistory, readSearchHistory } from "@/lib/search-history";
 
 type Option = { value: string; label: string };
 
@@ -120,6 +121,8 @@ export default function SearchClient({
   tagProps = [],
   roleProps = [],
   initialQuery = "",
+  initialSavedSearches = [],
+  initialSavedId,
 }: {
   types: Option[];
   people: Option[];
@@ -135,6 +138,12 @@ export default function SearchClient({
   // Prefill from ?q= (the Discover panel's "Search everything about this"
   // handoff, ADR-127): the effect below fetches on mount when q is non-empty.
   initialQuery?: string;
+  // The owner's saved searches (settings.savedSearches), read server-side so
+  // the chip row renders without a round trip; kept in local state after that
+  // so save/delete update without a reload.
+  initialSavedSearches?: { id: string; name: string; state: Record<string, unknown> }[];
+  // A `?saved=<id>` deep link (page.tsx): applied once on mount.
+  initialSavedId?: string;
 }) {
   const [q, setQ] = useState(initialQuery);
   const [type, setType] = useState("");
@@ -160,6 +169,17 @@ export default function SearchClient({
   const [tags, setTags] = useState<TagRow[]>([]);
   const [nextTagId, setNextTagId] = useState(1);
 
+  // --- Saved searches + recent history. --------------------------------------
+  const [saved, setSaved] = useState(initialSavedSearches);
+  // Read after mount: this component is server-rendered, and localStorage
+  // differs from the server's empty list, so reading it during render would
+  // mismatch on hydration.
+  const [recent, setRecent] = useState<string[]>([]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRecent(readSearchHistory());
+  }, []);
+
   // A leading "/type" token in the box narrows to one type ("/note budget");
   // it overrides the Type dropdown and the remaining text is the query. Resolved
   // against the same registry that fills the dropdown.
@@ -184,6 +204,97 @@ export default function SearchClient({
     () => (whenPhrase.trim() ? parseFuzzyWhen(whenPhrase, todayYmd) : null),
     [whenPhrase, todayYmd]
   );
+
+  // Restore a saved-search snapshot into the live state, filling defaults for
+  // any key the snapshot doesn't have (an older snapshot, or a hand-edited
+  // one). Sets tuning on when the snapshot carries any fuzzy criterion, even
+  // if the snapshot itself didn't say so, so a restored search looks the same
+  // as when it was saved.
+  const restore = (state: Record<string, unknown>) => {
+    const s = state as Record<string, unknown>;
+    const str = (v: unknown, fallback = "") => (typeof v === "string" ? v : fallback);
+    const stop = (v: unknown, fallback: Stop): Stop =>
+      STOPS.includes(v as Stop) ? (v as Stop) : fallback;
+    setQ(str(s.q));
+    setType(str(s.type));
+    setPerson(str(s.person));
+    setFrom(str(s.from));
+    setTo(str(s.to));
+    const restoredTerms: TermRow[] = Array.isArray(s.terms)
+      ? s.terms
+          .filter((t): t is { value: unknown; stop?: unknown } => !!t && typeof t === "object")
+          .map((t, i) => ({ id: i + 1, value: str(t.value), stop: stop(t.stop, "probably") }))
+      : [];
+    setTerms(restoredTerms);
+    setNextTermId(restoredTerms.length + 1);
+    setWhenPhrase(str(s.whenPhrase));
+    setWhenStop(stop(s.whenStop, "probably"));
+    setWhenSrc(str(s.whenSrc, "updated"));
+    setTypeStop(stop(s.typeStop, "sure"));
+    setPersonStop(stop(s.personStop, "sure"));
+    setPersonRole(str(s.personRole));
+    const restoredTags: TagRow[] = Array.isArray(s.tags)
+      ? s.tags
+          .filter((t): t is { key: unknown; value: unknown; stop?: unknown } => !!t && typeof t === "object")
+          .map((t, i) => ({ id: i + 1, key: str(t.key), value: str(t.value), stop: stop(t.stop, "might") }))
+      : [];
+    setTags(restoredTags);
+    setNextTagId(restoredTags.length + 1);
+    const hasFuzzyCriteria =
+      restoredTerms.length > 0 ||
+      restoredTags.length > 0 ||
+      !!str(s.whenPhrase) ||
+      stop(s.typeStop, "sure") !== "sure" ||
+      stop(s.personStop, "sure") !== "sure" ||
+      !!str(s.personRole);
+    setTuning(s.tuning === true || hasFuzzyCriteria);
+  };
+
+  // Apply a `?saved=<id>` deep link once on mount. A one-time bootstrap from a
+  // URL param, not a sync with an external system, so the setState-in-effect
+  // rule doesn't apply here.
+  useEffect(() => {
+    if (!initialSavedId) return;
+    const match = initialSavedSearches.find((sv) => sv.id === initialSavedId);
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (match) restore(match.state);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const saveSearch = async () => {
+    const name = window.prompt("Name this search", apiQ || q);
+    if (!name || !name.trim()) return;
+    const snapshot: Record<string, unknown> = {
+      q, type, person, from, to, tuning, terms, whenPhrase, whenStop, whenSrc,
+      typeStop, personStop, personRole, tags,
+    };
+    try {
+      const entry = { id: crypto.randomUUID(), name: name.trim(), state: snapshot };
+      const next = [...saved, entry];
+      const patchRes = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ savedSearches: next }),
+      });
+      if (patchRes.ok) setSaved(next);
+    } catch {
+      /* offline; the button stays usable to retry */
+    }
+  };
+
+  const deleteSaved = async (id: string) => {
+    const next = saved.filter((s) => s.id !== id);
+    setSaved(next);
+    try {
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ savedSearches: next }),
+      });
+    } catch {
+      /* best-effort; a reload will resync from the server */
+    }
+  };
 
   const activeTerms = useMemo(
     () => terms.filter((t) => t.value.trim().length > 0),
@@ -599,7 +710,52 @@ export default function SearchClient({
         </div>
       )}
 
+      {saved.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-1.5 px-2 text-xs text-ink-subtle">
+          <span>Saved:</span>
+          {saved.map((s) => (
+            <span
+              key={s.id}
+              className="inline-flex items-center gap-1 rounded border border-line px-2 py-0.5"
+            >
+              <button
+                type="button"
+                onClick={() => restore(s.state)}
+                className="text-ink-subtle hover:text-ink"
+              >
+                {s.name}
+              </button>
+              <button
+                type="button"
+                onClick={() => deleteSaved(s.id)}
+                aria-label={`Delete saved search ${s.name}`}
+                className="text-ink-faint hover:text-ink-muted"
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
       <div className="mt-6">
+        {!canSearch && recent.length > 0 && (
+          <div className="px-2">
+            <p className="ui-meta text-ink-subtle">Recent searches</p>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {recent.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  onClick={() => setQ(r)}
+                  className="rounded border border-line px-2 py-1 text-xs text-ink-subtle hover:bg-surface-2 hover:text-ink-muted"
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         {awaitingText && (
           <p className="px-2 text-sm text-neutral-600">
             Keep typing to search {parsed?.type.label}.
@@ -613,14 +769,25 @@ export default function SearchClient({
         {canSearch && status === "loading" && results == null && (
           <p className="px-2 text-sm text-neutral-600">Searching…</p>
         )}
-        {results != null && (
-          <p className="px-2 text-xs text-neutral-600">
-            {results.length === 0
-              ? "No matches."
-              : `${results.length} match${results.length === 1 ? "" : "es"}${
-                  results.length === 50 ? " (showing the first 50)" : ""
-                }${fuzzy ? ", best guesses first" : ""}`}
-          </p>
+        {canSearch && (
+          <div className="flex items-center justify-between px-2">
+            <p className="text-xs text-neutral-600">
+              {results == null
+                ? ""
+                : results.length === 0
+                  ? "No matches."
+                  : `${results.length} match${results.length === 1 ? "" : "es"}${
+                      results.length === 50 ? " (showing the first 50)" : ""
+                    }${fuzzy ? ", best guesses first" : ""}`}
+            </p>
+            <button
+              type="button"
+              onClick={saveSearch}
+              className="rounded border border-line px-2 py-1 text-xs text-ink-subtle hover:bg-surface-2 hover:text-ink-muted"
+            >
+              Save search
+            </button>
+          </div>
         )}
         {results != null && results.length > 0 && (
           <ul className="mt-1">
@@ -635,6 +802,7 @@ export default function SearchClient({
                   </span>
                   <Link
                     href={`/items/${row.id}`}
+                    onClick={() => apiQ && pushSearchHistory(apiQ)}
                     className={`min-w-0 flex-1 truncate text-sm ${
                       row.title ? "text-neutral-200" : "text-neutral-500"
                     }`}

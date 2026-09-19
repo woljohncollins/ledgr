@@ -288,7 +288,7 @@ export default function SubtaskExpandableRow({
   // set-state-in-effect disable is a false positive: load() only sets state
   // after the fetch resolves (a real side effect), never synchronously.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect, react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (defaultOpen) void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
