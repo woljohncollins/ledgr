@@ -57,9 +57,12 @@ export type ViewItem = {
 
 // Due dates are UTC-midnight calendar days (ADR-008); format in UTC. The
 // timestamp columns are real instants; format in the owner's timezone.
+// Day dates read "Sep 04, 2026" everywhere in a view (2026-09-20, John's
+// preference): short month, two-digit day, full year.
 const utcDay = new Intl.DateTimeFormat("en-US", {
   month: "short",
-  day: "numeric",
+  day: "2-digit",
+  year: "numeric",
   timeZone: "UTC",
 });
 const utcDayLong = new Intl.DateTimeFormat("en-US", {
@@ -84,7 +87,12 @@ function tzFmts(tz: string) {
   let f = tzFmtCache.get(tz);
   if (!f) {
     f = {
-      day: new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric", timeZone: tz }),
+      day: new Intl.DateTimeFormat("en-US", {
+        month: "short",
+        day: "2-digit",
+        year: "numeric",
+        timeZone: tz,
+      }),
       dayLong: new Intl.DateTimeFormat("en-US", {
         weekday: "long",
         month: "long",
@@ -94,7 +102,8 @@ function tzFmts(tz: string) {
       key: new Intl.DateTimeFormat("en-CA", { timeZone: tz }),
       dayTime: new Intl.DateTimeFormat("en-US", {
         month: "short",
-        day: "numeric",
+        day: "2-digit",
+        year: "numeric",
         hour: "numeric",
         minute: "2-digit",
         timeZone: tz,
@@ -212,6 +221,12 @@ function formatPropValue(v: unknown, tz?: string): string {
   if (typeof v === "string" && tz) {
     const inst = propInstant(v);
     if (inst) return tzFmts(tz).dayTime.format(inst);
+  }
+  // A day-only date property ("2026-09-04") is a calendar day, not an instant:
+  // format it in UTC so the day never shifts, as "Sep 04, 2026".
+  if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
+    const d = new Date(`${v}T00:00:00Z`);
+    if (!Number.isNaN(d.getTime())) return utcDay.format(d);
   }
   return String(v);
 }
