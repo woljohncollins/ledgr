@@ -27,7 +27,8 @@ import BoardColumn from "@/components/views/BoardColumn";
 import { DEFAULT_GRAIN, type Grain } from "@/lib/timeline-grain";
 import type { TimelineEntry, TimelineUndated } from "@/lib/timeline-entry";
 import { DISPLAY_DEFAULTS } from "@/lib/views";
-import type { ColumnField, ViewColumn, ViewDefinition } from "@/lib/views";
+import type { ColumnField, ListSort, ViewColumn, ViewDefinition } from "@/lib/views";
+import { sortHref, sortKeyForColumn, sortKeyOf } from "@/lib/view-sort-param";
 import type { OverlayEvent } from "@/lib/calendar/overlay";
 import { isTerminalCategory, type StatusDef } from "@/lib/status";
 
@@ -462,6 +463,37 @@ function ListLayout({
   );
 }
 
+// Click-to-sort context for the table headers (2026-09-20): the sort the rows
+// are actually in (the view's own, or the page's ?sort override) plus the page
+// path the header links point back at. Absent on dashboard widgets and other
+// embedded renders, whose headers stay plain text.
+export type TableSortContext = { active: ListSort | undefined; basePath: string };
+
+function SortableHeader({
+  label,
+  sortKey,
+  ctx,
+}: {
+  label: string;
+  sortKey: string | null;
+  ctx?: TableSortContext;
+}) {
+  if (!ctx || !sortKey) return <>{label}</>;
+  const isActive = sortKeyOf(ctx.active) === sortKey;
+  const arrow = isActive ? (ctx.active?.dir === "asc" ? " ▲" : " ▼") : "";
+  return (
+    <Link
+      href={sortHref(ctx.basePath, sortKey, ctx.active)}
+      className={`hover:text-neutral-200 ${isActive ? "text-neutral-200" : ""}`}
+      aria-sort={isActive ? (ctx.active?.dir === "asc" ? "ascending" : "descending") : undefined}
+      title={`Sort by ${label}`}
+    >
+      {label}
+      {arrow}
+    </Link>
+  );
+}
+
 function TableLayout({
   items,
   view,
@@ -469,6 +501,7 @@ function TableLayout({
   propertyKinds,
   selectable,
   tz,
+  tableSort,
 }: {
   items: ViewItem[];
   view: ViewDefinition;
@@ -476,6 +509,7 @@ function TableLayout({
   propertyKinds: Record<string, string>;
   selectable?: boolean;
   tz: string;
+  tableSort?: TableSortContext;
 }) {
   // The view's chosen columns, or the default four (Type/Status/Urgency/Date)
   // expressed as field columns so one rendering path serves both. "Date" maps
@@ -507,10 +541,16 @@ function TableLayout({
         <thead>
           <tr className="border-b border-neutral-800 text-left text-xs uppercase tracking-wide text-neutral-500">
             {selectable && <SelectHeaderCell />}
-            <th className="py-1.5 pr-3 font-medium">Title</th>
+            <th className="py-1.5 pr-3 font-medium">
+              <SortableHeader label="Title" sortKey="title" ctx={tableSort} />
+            </th>
             {columns.map((col) => (
               <th key={`${col.source}:${col.key}`} className="py-1.5 pr-3 font-medium">
-                {columnLabel(col, propertyLabels)}
+                <SortableHeader
+                  label={columnLabel(col, propertyLabels)}
+                  sortKey={sortKeyForColumn(col)}
+                  ctx={tableSort}
+                />
               </th>
             ))}
           </tr>
@@ -1050,9 +1090,13 @@ export default function ViewRenderer({
   tz = DEFAULT_TIMEZONE,
   groupEdges,
   projectCards,
+  tableSort,
 }: {
   view: ViewDefinition;
   items: ViewItem[];
+  // Click-to-sort headers for the table layout: the sort the rows are in plus
+  // the page path the header links target. Only /views/[id] passes it.
+  tableSort?: TableSortContext;
   // Rich project cards (2026-08-17): card data + element config, resolved by
   // the page via projectCardsForView for a project-scoped list/board view.
   // When set, the list layout renders the card grid instead of rows and board
@@ -1132,6 +1176,7 @@ export default function ViewRenderer({
           propertyKinds={propertyKinds}
           selectable={selectable}
           tz={tz}
+          tableSort={tableSort}
         />
       );
     case "board":
