@@ -50,7 +50,10 @@ export default function AgendaDnd({
     base: days,
     moves: {},
   });
-  const moves = moveState.base === days ? moveState.moves : {};
+  const moves = useMemo(
+    () => (moveState.base === days ? moveState.moves : {}),
+    [moveState, days],
+  );
   const setMoves = (fn: (m: Record<string, string>) => Record<string, string>) =>
     setMoveState((s) => ({ base: days, moves: fn(s.base === days ? s.moves : {}) }));
 
