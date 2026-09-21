@@ -32,6 +32,14 @@ the status bar, and the bottom bar was sometimes gone or looked stretched.
 
 Not verified on a real iPhone yet; the insets are 0 in every desktop browser.
 
+## ✅ DONE — view widgets can drop their "+ Add" row (2026-09-21, non-core)
+
+John: a one-row "This week's review" card is for READING the review, not adding
+to it, and the inline capture line was taking the room the row needed. A view
+widget's gear gains "No + Add row" (`hideAdd` in ViewWidgetSettings, parsed in
+`dashboards.ts`, honoured by `hasInlineAdd`, settable through update_widget).
+Same shape as hide-when-empty from the same day.
+
 ## ✅ FIXED — "signed in, but not recognized" had no way out (2026-09-19, non-core)
 
 Reported from a phone: signing in with the wrong Google identity landed on the
