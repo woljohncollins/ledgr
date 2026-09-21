@@ -10,6 +10,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useRowMenu } from "@/components/lists/RowMenu";
 import SubtaskCheckbox from "@/components/subtasks/SubtaskCheckbox";
 import ViewRenderer, { type ViewItem } from "@/components/views/ViewRenderer";
@@ -57,11 +58,14 @@ function ItemRow({
   assoc,
   related,
   today,
+  draggable = false,
 }: {
   item: ViewItem;
   assoc?: Assoc;
   related?: Assoc[];
   today?: string;
+  // Focus card rows (2026-09-21): drag one onto the day list to unfocus it there.
+  draggable?: boolean;
 }) {
   const done = item.statusCategory === "done";
   const isTask = item.type === "task";
@@ -75,7 +79,16 @@ function ItemRow({
   });
   return (
     <li
-      className="flex items-center gap-2 rounded px-1.5 py-1 hover:bg-surface-2"
+      className={`flex items-center gap-2 rounded px-1.5 py-1 hover:bg-surface-2 ${draggable ? "cursor-grab active:cursor-grabbing" : ""}`}
+      draggable={draggable || undefined}
+      onDragStart={
+        draggable
+          ? (e) => {
+              e.dataTransfer.setData("text/plain", item.id);
+              e.dataTransfer.effectAllowed = "move";
+            }
+          : undefined
+      }
       {...(today ? handlers : null)}
     >
       {isTask && (
@@ -129,6 +142,26 @@ export default function WidgetBody({
 }) {
   const { widget } = data;
   const tz = useTimezone();
+  const router = useRouter();
+  // The Focused-today card (2026-09-21): a view whose filter is focusedToday. Its
+  // rows drag out (to the day list, which unfocuses them) and it accepts drops of
+  // any task row (from the agenda), day-stamping the task into today's focus.
+  const isFocusCard = widget.kind === "view" && !!data.view?.filter.focusedToday && !!today;
+  const focusDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    const id = e.dataTransfer.getData("text/plain");
+    if (!id || !today) return;
+    if (data.items.some((it) => it.id === id)) return;
+    fetch(`/api/items/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ propertyPatch: { focus: { date: today, order: Date.now() } } }),
+    })
+      .then((res) => {
+        if (res.ok) router.refresh();
+      })
+      .catch(() => {});
+  };
 
   if (widget.kind === "stat") {
     const s = widget.settings as StatWidgetSettings;
@@ -333,7 +366,11 @@ export default function WidgetBody({
   // compact list preview
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <ul className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2">
+      <ul
+        className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2"
+        onDragOver={isFocusCard ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } : undefined}
+        onDrop={isFocusCard ? focusDrop : undefined}
+      >
         {data.items.length > 0 ? (
           data.items.map((item) => {
             const rel = data.related?.[item.id] ?? [];
@@ -341,11 +378,13 @@ export default function WidgetBody({
             // tagged to) for the chip; fall back to the first related item.
             const assoc = rel.find((r) => r.type !== "task") ?? rel[0];
             return (
-              <ItemRow key={item.id} item={item} assoc={assoc} related={rel} today={today} />
+              <ItemRow key={item.id} item={item} assoc={assoc} related={rel} today={today} draggable={isFocusCard} />
             );
           })
         ) : (
-          <li className="px-1.5 py-1 text-sm text-neutral-600">No items match.</li>
+          <li className="px-1.5 py-1 text-sm text-neutral-600">
+            {isFocusCard ? "Drop a task here to focus it today." : "No items match."}
+          </li>
         )}
         {widget.viewId && data.count > data.items.length && (
           <li className="px-1.5 pt-1">

@@ -135,7 +135,21 @@ export default function AgendaDnd({
     if (!id || !slot) return;
     const dayRows = shown.find((d) => d.key === slot.day)?.rows ?? [];
     const self = shown.flatMap((d) => d.rows).find((r) => r.id === id);
-    if (!self) return;
+    if (!self) {
+      // Not one of ours: a task dragged in from the Focused-today card. Unfocus it
+      // and give it the day; the refresh brings it into this list.
+      const value = slot.day === AGENDA_UNDATED ? null : dayIso(slot.day);
+      fetch(`/api/items/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ scheduledDate: value, dueDate: value, propertyPatch: { focus: null } }),
+      })
+        .then((res) => {
+          if (res.ok) router.refresh();
+        })
+        .catch(() => {});
+      return;
+    }
     // Neighbours in the target day, excluding the dragged row itself.
     const others = dayRows.filter((r) => r.id !== id);
     const selfIdx = dayRows.findIndex((r) => r.id === id);

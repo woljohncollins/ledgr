@@ -79,6 +79,9 @@ export type ViewFilter = {
   // auto-clears overnight, ADR-078), so it can't be a stored date; the predicate
   // is an index-backed `properties @>` containment. Powers the Top-3 widget.
   focusedToday?: boolean;
+  // The complement (2026-09-21, John's This Week): hide whatever is focused today,
+  // so a task shows on the Focused card OR the day list, never both.
+  excludeFocusedToday?: boolean;
   // Untriaged bucket: items flagged inbox=true (the Tasks "Inbox" tab / quick
   // capture default). Index-backed (items_inbox_idx).
   inbox?: boolean;
@@ -269,6 +272,11 @@ function viewWhere(ownerId: string, filter: ViewFilter): SQL[] {
     const t = todayBounds().today;
     const ymd = `${t.y}-${String(t.m).padStart(2, "0")}-${String(t.d).padStart(2, "0")}`;
     where.push(sql`${items.properties} @> ${JSON.stringify({ focus: { date: ymd } })}::jsonb`);
+  }
+  if (filter.excludeFocusedToday) {
+    const t = todayBounds().today;
+    const ymd = `${t.y}-${String(t.m).padStart(2, "0")}-${String(t.d).padStart(2, "0")}`;
+    where.push(sql`not (${items.properties} @> ${JSON.stringify({ focus: { date: ymd } })}::jsonb)`);
   }
 
   // The AND/OR rules layer (ADR-164). buildWhereSql folds the group's conditions
@@ -833,6 +841,7 @@ export function parseViewFilter(raw: unknown): ViewFilter {
     if (w) out.where = w;
   }
   if (r.focusedToday === true) out.focusedToday = true;
+  if (r.excludeFocusedToday === true) out.excludeFocusedToday = true;
   return out;
 }
 
