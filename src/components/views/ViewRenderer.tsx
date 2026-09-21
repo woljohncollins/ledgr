@@ -7,6 +7,7 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import BoardDnd, { type BoardCard } from "@/components/views/BoardDnd";
+import AgendaDnd, { AGENDA_UNDATED, type AgendaDay, type AgendaRow } from "@/components/views/AgendaDnd";
 import ProjectCardGrid, { ProjectCardBody, projectCardFrameClass } from "@/components/projects/ProjectCardGrid";
 import type { ViewProjectCards } from "@/lib/project-cards";
 import PlannerCalendar from "@/components/planner/PlannerCalendar";
@@ -890,6 +891,50 @@ function AgendaLayout({
     buckets.get(key)!.items.push(item);
   }
   const days = [...buckets.entries()].sort(([a], [b]) => a.localeCompare(b));
+
+  // Interactive agenda (2026-09-21): on a page render (today set) of a calendar-day
+  // date property, rows drag between day dividers. The next two weeks render
+  // even when empty so there is always a day to drop on; past days with items
+  // stay (that is the overdue pile); the "No date" section clears the date.
+  const dragField: "scheduledDate" | "dueDate" | null =
+    prop === "dueDate" ? "dueDate" : prop == null || prop === "plan" || prop === "scheduledDate" ? "scheduledDate" : null;
+  if (today && dragField) {
+    const keys = new Set(buckets.keys());
+    const [ty, tm, td] = today.split("-").map(Number);
+    for (let i = 0; i < 14; i++) {
+      const d = new Date(Date.UTC(ty, tm - 1, td + i));
+      keys.add(utcKey.format(d));
+    }
+    const row = (item: ViewItem): AgendaRow => ({
+      id: item.id,
+      node: (
+        <ItemRow
+          key={item.id}
+          item={item}
+          prop={prop}
+          columns={view.columns}
+          propertyLabels={propertyLabels}
+          statuses={statuses}
+          selectable={selectable}
+          rollup={rollups?.get(item.id)}
+          today={today}
+          tz={tz}
+        />
+      ),
+    });
+    const dayList: AgendaDay[] = [...keys]
+      .sort()
+      .map((key) => ({
+        key,
+        label: buckets.get(key)?.label ?? utcDayLong.format(new Date(`${key}T12:00:00Z`)),
+        isToday: key === today,
+        isPast: key < today,
+        rows: (buckets.get(key)?.items ?? []).map(row),
+      }));
+    dayList.push({ key: AGENDA_UNDATED, label: "No date", rows: undated.map(row) });
+    return <AgendaDnd days={dayList} dateField={dragField} />;
+  }
+
   return (
     <div className="mt-4 flex flex-col gap-5">
       {days.map(([key, { label, items: dayItems }]) => (
