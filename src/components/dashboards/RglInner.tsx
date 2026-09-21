@@ -19,6 +19,7 @@ import {
 } from "@/lib/dashboard-widgets";
 import { defaultCell, defaultH, GRID_MARGIN, ROW_HEIGHT, smOrder } from "@/lib/dashboard-grid";
 import WidgetFrame from "./WidgetFrame";
+import type { ViewWidgetSettings } from "@/lib/dashboard-widgets";
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
 
@@ -119,10 +120,23 @@ export default function RglInner({
   onAppearance: (id: string, appearance: WidgetAppearance) => void;
   onViewChange?: (id: string, viewId: string) => void;
 }) {
+  // A view widget flagged hideWhenEmpty (2026-09-21) drops out of the grid when
+  // its view matches nothing; vertical compaction closes the gap. Edit mode keeps
+  // every widget visible so the flag can be changed back.
+  const shown = editMode
+    ? widgets
+    : widgets.filter(
+        (wd) =>
+          !(
+            wd.widget.kind === "view" &&
+            (wd.widget.settings as ViewWidgetSettings).hideWhenEmpty &&
+            wd.count === 0
+          )
+      );
   return (
     <ResponsiveGridLayout
       className={editMode ? "layout dash-edit" : "layout"}
-      layouts={buildLayouts(widgets, editMode, today)}
+      layouts={buildLayouts(shown, editMode, today)}
       breakpoints={BREAKPOINT_PX}
       cols={COLS}
       rowHeight={ROW_HEIGHT}
@@ -142,10 +156,10 @@ export default function RglInner({
       draggableCancel=".cancel-drag"
       compactType="vertical"
       onLayoutChange={(_current, all) =>
-        onLayoutChange(keepStoredHeights(widgets, all, editMode, today))
+        onLayoutChange(keepStoredHeights(shown, all, editMode, today))
       }
     >
-      {widgets.map((wd) => (
+      {shown.map((wd) => (
         <div key={wd.widget.id}>
           <WidgetFrame
             data={wd}

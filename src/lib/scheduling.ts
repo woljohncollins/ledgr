@@ -45,17 +45,34 @@ function overdueWhere(ownerId: string, dueToday: Date): SQL {
 // while the parent jumps forward, so their spacing closes up. Rare (it needs a
 // subtask dated ahead of a parent that is already late) and left as a known
 // exception rather than silently picking a semantic — see next_steps.md.
+//
+// INSTANCE OPTION (John's fork, 2026-09-21): `ROLL_OVERDUE_MOVES_DUE`. John keeps
+// ONE date per task — the due date is the start date — and wants anything left
+// undone on its day to become due the next day. With the option on (the default
+// on this fork; set "0" to restore the upstream behaviour above) the roll moves
+// the due date to today as well, so both dates travel together.
+export function rollMovesDue(): boolean {
+  const v = (process.env.ROLL_OVERDUE_MOVES_DUE ?? "1").trim().toLowerCase();
+  return !(v === "0" || v === "false" || v === "no");
+}
+
 export async function rollOverdueScheduled(
   ownerId: string,
-  now = new Date()
-): Promise<{ rolled: number }> {
+  now = new Date(),
+  opts: { alsoDue?: boolean } = {}
+): Promise<{ rolled: number; movedDue: boolean }> {
   const { dueToday } = todayBounds(now);
+  const alsoDue = opts.alsoDue ?? false;
   const res = await getDb()
     .update(items)
-    .set({ scheduledDate: dueToday, updatedAt: new Date() })
+    .set(
+      alsoDue
+        ? { scheduledDate: dueToday, dueDate: dueToday, updatedAt: new Date() }
+        : { scheduledDate: dueToday, updatedAt: new Date() }
+    )
     .where(overdueWhere(ownerId, dueToday))
     .returning({ id: items.id });
-  return { rolled: res.length };
+  return { rolled: res.length, movedDue: alsoDue };
 }
 
 // How many tasks rollOverdueScheduled would move, without moving them — powers

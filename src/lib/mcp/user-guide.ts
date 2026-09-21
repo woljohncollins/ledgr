@@ -731,6 +731,20 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
   Type and press Enter to land on \`/search\` with those words already run.
 - **Advanced search** (\`/search\`) — full text over titles and bodies with
   phrases, \`OR\`, and \`-exclusions\`, plus filters.
+- **Agenda views drag between days and into order.** An agenda view (tasks
+  grouped under a day divider) lists each day highest priority first: P1, then P2,
+  then P3, then unranked. Drag any row onto another day, including an empty one in
+  the next two weeks, or to a new spot within a day. A drop sets the task's date
+  (start and due together) and, when you drop it among other tasks, it takes the
+  priority of the tasks it lands next to and keeps that position. Drop on "No
+  date" to clear the date. On a phone, hold a row for a moment, then drag.
+- **Dashboard cards can hide when empty.** In a view widget's gear, tick "Hide this
+  card when it has nothing to show" and the card drops out of the grid until its
+  view has items again. Edit mode always shows every card.
+- **Unfinished tasks roll forward every night.** A little after 1:00 AM Eastern,
+  any open task whose day has passed is moved to today, and today becomes its new
+  due date. Nothing is left behind in yesterday. The "Roll N overdue" button on
+  Today does the same thing on demand.
 - **Sort a table by clicking its header.** On a table view, the Title header
   and every date, urgency, and custom-property column header are links: click
   once to sort ascending, again to flip. The arrow marks the active column. It

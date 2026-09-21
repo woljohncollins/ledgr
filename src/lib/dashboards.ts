@@ -164,7 +164,8 @@ function parseWidgetSettings(kind: WidgetKind, raw: unknown): WidgetSettings {
     const renderStyle = RENDER_STYLES.includes(r.renderStyle as RenderStyle)
       ? (r.renderStyle as RenderStyle)
       : "compact";
-    return { titleOverride, itemLimit, sortOverride, renderStyle };
+    const hideWhenEmpty = r.hideWhenEmpty === true || r.hideWhenEmpty === "true";
+    return { titleOverride, itemLimit, sortOverride, renderStyle, hideWhenEmpty };
   }
   if (kind === "stat") {
     return { label: str(r.label, 60), metric: "count" };

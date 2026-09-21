@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { verifyMachineRequest } from "@/lib/auth/credentials";
 import { captureError, createLogger } from "@/lib/log";
 import { resolveMachineOwner } from "@/lib/machine/owner";
-import { rollOverdueScheduled } from "@/lib/scheduling";
+import { rollMovesDue, rollOverdueScheduled } from "@/lib/scheduling";
 
 // Optional daily overdue auto-roll (T2, ADR-073): a scheduler (Vercel cron /
 // GitHub Actions / a local cron) calls this through the machine-token door
@@ -24,7 +24,7 @@ export async function GET(request: Request) {
       log.warn("roll-overdue: no owner resolved");
       return NextResponse.json({ ok: true, rolled: 0, note: "no owner" });
     }
-    const result = await rollOverdueScheduled(ownerId);
+    const result = await rollOverdueScheduled(ownerId, new Date(), { alsoDue: rollMovesDue() });
     log.info("roll-overdue finished", { ...result });
     return NextResponse.json({ ok: true, correlationId: log.correlationId, ...result });
   } catch (err) {

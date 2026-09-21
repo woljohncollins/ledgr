@@ -8,6 +8,8 @@ import {
   getDashboard,
   parseDashboardInput,
   parseWidget,
+  removeWidget,
+  updateWidget,
   WIDGET_KINDS,
 } from "@/lib/dashboards";
 import { ItemError } from "@/lib/items";
@@ -91,6 +93,75 @@ export const dashboardTools: McpTool[] = [
         );
       }
       const updated = await addWidget(ownerId, dashboardId, widget);
+      return dashView(updated);
+    },
+  },
+  {
+    name: "update_widget",
+    title: "Update a dashboard widget",
+    description:
+      "Change one widget on a dashboard by id (widget ids come from " +
+      "describe_workspace / create_dashboard / add_widget). `settings` MERGES into " +
+      "the widget's current settings (a view widget's titleOverride, itemLimit, " +
+      "sortOverride, renderStyle, hideWhenEmpty — hideWhenEmpty:true drops the " +
+      "card from the grid when its view matches nothing); `layout` REPLACES the " +
+      "grid placement ({ lg: {x,y,w,h}, md?, sm? }); `viewId` repoints a view/stat/" +
+      "tree widget at another saved view. Pass only what you want to change.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dashboardId: { type: "string", description: "The dashboard id (UUID)." },
+        widgetId: { type: "string", description: "The widget id (UUID) on that dashboard." },
+        settings: { type: "object", description: "Settings keys to merge into the widget's settings." },
+        layout: { type: "object", description: "Replacement grid placement per breakpoint." },
+        viewId: { type: "string", description: "Repoint a view-backed widget at this saved view id." },
+      },
+      required: ["dashboardId", "widgetId"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    handler: async (ownerId, args) => {
+      const dashboardId = asUuid(args.dashboardId, "dashboardId");
+      const widgetId = asUuid(args.widgetId, "widgetId");
+      const dash = await getDashboard(ownerId, dashboardId);
+      const current = dash.widgets.find((w) => w.id === widgetId);
+      if (!current) throw new ItemError("not_found", "no widget with that id on this dashboard");
+      const patch: Record<string, unknown> = {};
+      if (args.settings && typeof args.settings === "object") {
+        patch.settings = {
+          ...(current.settings as Record<string, unknown>),
+          ...(args.settings as Record<string, unknown>),
+        };
+      }
+      if (args.layout && typeof args.layout === "object") patch.layout = args.layout;
+      if (typeof args.viewId === "string") patch.viewId = asUuid(args.viewId, "viewId");
+      if (Object.keys(patch).length === 0) {
+        throw new ItemError("bad_request", "pass settings, layout, and/or viewId");
+      }
+      const updated = await updateWidget(ownerId, dashboardId, widgetId, patch);
+      return dashView(updated);
+    },
+  },
+  {
+    name: "remove_widget",
+    title: "Remove a dashboard widget",
+    description:
+      "Remove one widget from a dashboard by id. The backing saved view is NOT " +
+      "deleted — only the card on the grid goes. Confirm with the owner first.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        dashboardId: { type: "string", description: "The dashboard id (UUID)." },
+        widgetId: { type: "string", description: "The widget id (UUID) to remove." },
+      },
+      required: ["dashboardId", "widgetId"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    handler: async (ownerId, args) => {
+      const dashboardId = asUuid(args.dashboardId, "dashboardId");
+      const widgetId = asUuid(args.widgetId, "widgetId");
+      const updated = await removeWidget(ownerId, dashboardId, widgetId);
       return dashView(updated);
     },
   },

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { errorResponse, requireOwner } from "@/lib/api";
-import { rollOverdueScheduled } from "@/lib/scheduling";
+import { rollMovesDue, rollOverdueScheduled } from "@/lib/scheduling";
 
 export const dynamic = "force-dynamic";
 
@@ -11,7 +11,9 @@ export async function POST() {
   const owner = await requireOwner();
   if (owner instanceof NextResponse) return owner;
   try {
-    return NextResponse.json(await rollOverdueScheduled(owner.id));
+    return NextResponse.json(
+      await rollOverdueScheduled(owner.id, new Date(), { alsoDue: rollMovesDue() })
+    );
   } catch (err) {
     return errorResponse(err);
   }
