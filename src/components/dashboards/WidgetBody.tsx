@@ -315,6 +315,7 @@ export default function WidgetBody({
           <ViewRenderer
             view={view}
             boardDraggable={boardDraggable}
+            agendaDraggable={!editMode}
             items={data.items}
             groupOrder={data.groupOrder}
             propertyLabels={data.propertyLabels}
