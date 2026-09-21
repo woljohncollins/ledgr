@@ -44,6 +44,7 @@ import { getSettings } from "@/lib/settings";
 import { parseRecurrence } from "@/lib/recurrence";
 import { shiftChildDates, type ShiftedChild } from "@/lib/relative-subtask-service";
 import { dayDelta, isDuePinned, shiftDay } from "@/lib/date-anchor";
+import { mirrorTaskDates } from "@/lib/one-date";
 import {
   appTodayYmd,
   completeMaterializedOccurrence,
@@ -298,7 +299,10 @@ function requireStatusKey(
   );
 }
 
-export async function createItem(ownerId: string, input: ItemInput) {
+export async function createItem(ownerId: string, rawInput: ItemInput) {
+  // One date per task (John, 2026-09-21): a task created with only a due or only
+  // a scheduled day gets the other set to match.
+  const input = mirrorTaskDates(rawInput, rawInput.type === "task");
   const capability = await assertTypeExists(input.type);
   // is_template is set explicitly on a prototype root, else inherited from a
   // template parent (ADR-093), so a subtask under a prototype is template
@@ -615,6 +619,9 @@ export async function updateItem(
       set.inbox = false;
     }
   }
+  // One date per task (John, 2026-09-21): editing either day on a task sets both.
+  // Done before anchoring, which then sees "both dates stated" and stands down.
+  patch = mirrorTaskDates(patch, (patch.type ?? existing[0].type) === "task");
   if (patch.dueDate !== undefined) set.dueDate = patch.dueDate;
   if (patch.scheduledDate !== undefined) set.scheduledDate = patch.scheduledDate;
   // Date anchoring (ADR-253): the deadline hangs off the plan date, so moving the
