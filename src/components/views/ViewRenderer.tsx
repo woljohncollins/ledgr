@@ -176,10 +176,27 @@ function StatusChip({ status, statuses }: { status: string; statuses?: StatusDef
 
 // Priorities 1–3 show as a chip (John, 2026-09-21: three priorities like Outlook,
 // High / Normal / Low = P1 / P2 / P3). P4–P6 stay quiet as before.
+// Priority colours (John, 2026-09-21): P1 blue, P2 green, P3 yellow — light tints
+// on the whole row plus a matching chip. Shared by every list/agenda row.
+const PRIORITY_CHIP: Record<number, string> = {
+  1: "bg-blue-900/60 text-blue-300",
+  2: "bg-green-900/60 text-green-300",
+  3: "bg-yellow-900/60 text-yellow-300",
+};
+// `!` so the tint beats SwipeRow's own bg-surface-0 on its inner div.
+const PRIORITY_ROW_TINT: Record<number, string> = {
+  1: " !bg-blue-500/15",
+  2: " !bg-green-500/15",
+  3: " !bg-yellow-500/15",
+};
+function priorityRowTint(isTask: boolean, done: boolean, urgency: number | null): string {
+  if (!isTask || done || urgency == null) return "";
+  return PRIORITY_ROW_TINT[urgency] ?? "";
+}
 function UrgencyChip({ urgency }: { urgency: number | null }) {
   if (urgency == null || urgency > 3) return null;
   return (
-    <span className="shrink-0 rounded bg-amber-950 px-1.5 text-xs text-amber-400">
+    <span className={`shrink-0 rounded px-1.5 text-xs font-medium ${PRIORITY_CHIP[urgency]}`}>
       {`P${urgency}`}
     </span>
   );
@@ -402,8 +419,9 @@ function ItemRow({
     </>
   );
   const menuOpts = today
-    ? { id: item.id, canComplete: isTask, done, today, label: item.title || "Untitled" }
+    ? { id: item.id, canComplete: isTask, done, today, label: item.title || "Untitled", urgency: item.urgency }
     : undefined;
+  const rowClass = ITEM_ROW_CLASS + priorityRowTint(isTask, done, item.urgency);
   // A task with task-children keeps the expandable "n/m" pill (which carries the
   // menu when the surface is interactive).
   if (isTask && rollup && rollup.total > 0) {
@@ -412,7 +430,7 @@ function ItemRow({
         id={item.id}
         done={rollup.done}
         total={rollup.total}
-        liClassName={ITEM_ROW_CLASS}
+        liClassName={rowClass}
         menuOptions={menuOpts}
       >
         {inner}
@@ -424,16 +442,16 @@ function ItemRow({
   // `today`, so their rows stay a plain <li> (defer by hiding).
   if (menuOpts) {
     return isTask ? (
-      <SwipeRow className={ITEM_ROW_CLASS} {...menuOpts}>
+      <SwipeRow className={rowClass} {...menuOpts}>
         {inner}
       </SwipeRow>
     ) : (
-      <RowMenu className={ITEM_ROW_CLASS} {...menuOpts}>
+      <RowMenu className={rowClass} {...menuOpts}>
         {inner}
       </RowMenu>
     );
   }
-  return <li className={ITEM_ROW_CLASS}>{inner}</li>;
+  return <li className={rowClass}>{inner}</li>;
 }
 
 // --- layouts --------------------------------------------------------------
@@ -593,7 +611,8 @@ function TableLayout({
               {columns.map((col) => (
                 <td
                   key={`${col.source}:${col.key}`}
-                  className="py-1.5 pr-3 text-neutral-400"
+                  className="max-w-[18rem] truncate py-1.5 pr-3 text-neutral-400"
+                  title={columnText(item, col, tz)}
                 >
                   {columnCell(item, col, tz, propertyKinds)}
                 </td>

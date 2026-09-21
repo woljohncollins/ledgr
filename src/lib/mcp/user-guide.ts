@@ -738,6 +738,10 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
   (start and due together) and, when you drop it among other tasks, it takes the
   priority of the tasks it lands next to and keeps that position. Drop on "No
   date" to clear the date. On a phone, hold a row for a moment, then drag.
+- **Priorities P1, P2, P3.** A task row is tinted blue for P1, green for P2, and
+  yellow for P3, with a matching chip. To change one, right-click the row (or
+  long-press on a phone) and pick P1, P2, P3, or the dash for none. The same menu's
+  quick dates set the task's start and due day together.
 - **Dashboard cards can hide when empty.** In a view widget's gear, tick "Hide this
   card when it has nothing to show" and the card drops out of the grid until its
   view has items again. Edit mode always shows every card.
