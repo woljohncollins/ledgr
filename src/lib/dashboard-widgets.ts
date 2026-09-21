@@ -35,6 +35,10 @@ export type ViewWidgetSettings = {
   // Skip the whole card when the view matches nothing (2026-09-21, John: an
   // empty "Overdue" box is noise). Edit mode always shows it so it can be found.
   hideWhenEmpty?: boolean;
+  // Size the card to its rows instead of a fixed grid height (2026-09-21, John:
+  // the Focused card "should flex to the number of items in it"). View mode only;
+  // edit mode shows the stored height so it can still be arranged.
+  fitToContent?: boolean;
 };
 
 // Stat/count card: a single number from a view's filter (countViewItems).

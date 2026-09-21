@@ -750,6 +750,10 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
   drag a focused task back onto a day to unfocus it and give it that day. A day
   list can be told to hide focused tasks (view filter excludeFocusedToday) so each
   task shows in one place. Desktop mouse drag; on a phone use the row menu.
+- **Dashboard cards can fit their contents.** In a compact view widget's gear, tick
+  "Fit height to contents" and the card grows and shrinks with its rows (up to ten
+  rows, then it scrolls) instead of holding a fixed height. Cards below it slide
+  up to fill the space.
 - **Dashboard cards can hide when empty.** In a view widget's gear, tick "Hide this
   card when it has nothing to show" and the card drops out of the grid until its
   view has items again. Edit mode always shows every card.

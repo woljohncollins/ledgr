@@ -45,12 +45,30 @@ function minFor(kind: Kind) {
 // up to be persisted. A folded tile is also NOT resizable — the chevron expands
 // it first, which is honest, and it means no drag-resize can be silently thrown
 // away by that restore.
+// Fit-to-content (2026-09-21): a compact view widget flagged fitToContent takes
+// the grid height its rows need - header, the rows actually shown, the inline
+// add line - instead of its stored cell. View mode only; like folding, the forced
+// h is presentation and keepStoredHeights strips it before anything persists.
+const FIT_CHROME_PX = 100; // card header + list padding + the "+ Add" line
+const FIT_ROW_PX = 34; // one compact row
+const FIT_MAX_ROWS = 10;
+function fitHeight(wd: WidgetData): number | null {
+  if (wd.widget.kind !== "view") return null;
+  const s = wd.widget.settings as ViewWidgetSettings;
+  if (!s.fitToContent || s.renderStyle === "faithful") return null;
+  const n = wd.items.length + (wd.count > wd.items.length ? 1 : 0); // "+N more" line
+  const px = FIT_CHROME_PX + Math.max(n, 1) * FIT_ROW_PX;
+  const unit = ROW_HEIGHT + GRID_MARGIN[1];
+  return Math.min(FIT_MAX_ROWS, Math.max(2, Math.ceil((px + GRID_MARGIN[1]) / unit)));
+}
+
 function buildLayouts(widgets: WidgetData[], editMode: boolean, today?: string): Layouts {
   const out: Layouts = { lg: [], md: [], sm: [] };
   const smRank = smOrder(widgets);
   widgets.forEach((wd, i) => {
     const kind = wd.widget.kind;
     const folded = widgetFolded(wd, editMode, today);
+    const fit = !editMode && !folded ? fitHeight(wd) : null;
     const min = minFor(kind);
     for (const bp of GRID_BREAKPOINTS) {
       // On sm, an un-placed widget falls in DESKTOP reading order, not creation
@@ -58,10 +76,10 @@ function buildLayouts(widgets: WidgetData[], editMode: boolean, today?: string):
       const base = wd.widget.layout[bp] ?? defaultCell(bp, bp === "sm" ? smRank[i] : i, kind);
       (out[bp] as Layout[]).push({
         i: wd.widget.id,
-        ...(folded ? { ...base, h: 1 } : base),
+        ...(folded ? { ...base, h: 1 } : fit != null ? { ...base, h: fit } : base),
         minW: min.minW,
-        minH: folded ? 1 : min.minH,
-        ...(folded ? { isResizable: false } : null),
+        minH: folded || fit != null ? 1 : min.minH,
+        ...(folded || fit != null ? { isResizable: false } : null),
       });
     }
   });
@@ -84,6 +102,7 @@ function keepStoredHeights(
   const folded = new Map<string, WidgetData>();
   for (const wd of widgets) {
     if (widgetFolded(wd, editMode, today)) folded.set(wd.widget.id, wd);
+    else if (!editMode && fitHeight(wd) != null) folded.set(wd.widget.id, wd); // fitted: same restore
   }
   if (folded.size === 0) return all;
   const out: Layouts = {};
