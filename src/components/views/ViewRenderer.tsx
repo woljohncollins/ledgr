@@ -867,6 +867,7 @@ function AgendaLayout({
   rollups,
   today,
   tz,
+  agendaDraggable = true,
 }: {
   items: ViewItem[];
   view: ViewDefinition;
@@ -876,6 +877,7 @@ function AgendaLayout({
   rollups?: Map<string, Progress>;
   today?: string;
   tz: string;
+  agendaDraggable?: boolean;
 }) {
   const prop = view.dateProperty;
   const longFmt = usesUtc(prop) ? utcDayLong : tzFmts(tz).dayLong;
@@ -900,7 +902,7 @@ function AgendaLayout({
   // stay (that is the overdue pile); the "No date" section clears the date.
   const dragField: "scheduledDate" | "dueDate" | null =
     prop === "dueDate" ? "dueDate" : prop == null || prop === "plan" || prop === "scheduledDate" ? "scheduledDate" : null;
-  if (today && dragField) {
+  if (today && agendaDraggable && dragField) {
     const keys = new Set(buckets.keys());
     const [ty, tm, td] = today.split("-").map(Number);
     for (let i = 0; i < 14; i++) {
@@ -1148,6 +1150,7 @@ export default function ViewRenderer({
   propertyLabels = {},
   propertyKinds = {},
   boardDraggable = false,
+  agendaDraggable = true,
   statuses,
   month,
   calendarNavHref,
@@ -1192,6 +1195,9 @@ export default function ViewRenderer({
   // value. The page decides (only safe for status/urgency/single-select);
   // dashboards leave it false, so a board widget stays read-only.
   boardDraggable?: boolean;
+  // Agenda layout: allow row drag between/within days (off inside a dashboard in
+  // edit mode so row drag and the grid drag never compete). Default on.
+  agendaDraggable?: boolean;
   // Calendar month to show, "YYYY-MM" (from the page's ?month= param); defaults
   // to the current month.
   month?: string;
@@ -1352,6 +1358,7 @@ export default function ViewRenderer({
           rollups={rollups}
           today={today}
           tz={tz}
+          agendaDraggable={agendaDraggable}
         />
       );
     default:
