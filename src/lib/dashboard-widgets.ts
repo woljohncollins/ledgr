@@ -35,6 +35,10 @@ export type ViewWidgetSettings = {
   // Skip the whole card when the view matches nothing (2026-09-21, John: an
   // empty "Overdue" box is noise). Edit mode always shows it so it can be found.
   hideWhenEmpty?: boolean;
+  // Drop the inline "+ Add" capture row (2026-09-21, John: a one-row "This
+  // week's review" card is for READING the review, not adding to it, and the
+  // add line was taking the room the row needed).
+  hideAdd?: boolean;
 };
 
 // Stat/count card: a single number from a view's filter (countViewItems).
@@ -346,7 +350,13 @@ export function applyFocus(filter: ViewFilter, focusItemId: string | null): View
 // gates the row on exactly this; the fold check below reads it so an empty
 // capture surface is never folded shut.
 export function hasInlineAdd(d: WidgetData, editMode: boolean, today?: string): boolean {
-  return d.widget.kind === "view" && !editMode && !!today && !!d.view?.filter.type;
+  return (
+    d.widget.kind === "view" &&
+    !editMode &&
+    !!today &&
+    !!d.view?.filter.type &&
+    !(d.widget.settings as ViewWidgetSettings).hideAdd
+  );
 }
 
 // A list-backed widget that resolved to nothing at all: no rows AND no "+N more"

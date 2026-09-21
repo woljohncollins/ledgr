@@ -753,6 +753,9 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
 - **Dashboard cards can hide when empty.** In a view widget's gear, tick "Hide this
   card when it has nothing to show" and the card drops out of the grid until its
   view has items again. Edit mode always shows every card.
+- **Dashboard cards can drop their "+ Add" row.** A view card normally ends with an
+  inline capture line. For a card that is only for reading (this week's review, a
+  pinned note), tick "No + Add row" in its gear and the line goes away.
 - **Unfinished tasks roll forward every night.** A little after 1:00 AM Eastern,
   any open task whose day has passed is moved to today, and today becomes its new
   due date. Nothing is left behind in yesterday. The "Roll N overdue" button on
@@ -840,7 +843,7 @@ their children), an **embed** (another item, editable right there), a
 **container** (tabs or sections), and an **image**.
 
 Each widget has a gear for its own settings: item limit, sort, title, header and
-border, background colour. The dashboard itself can carry a full-bleed colour,
+border, background colour, hide when empty, and whether it shows the "+ Add" row. The dashboard itself can carry a full-bleed colour,
 gradient or image background with an adjustable scrim.
 
 **Dashboards are for doing, not just reading.** Rows have the row menu, list

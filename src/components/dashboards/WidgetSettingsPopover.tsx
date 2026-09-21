@@ -231,6 +231,14 @@ function renderFields(widget: DashboardWidget, onChange: (s: WidgetSettings) => 
           />
           Hide this card when it has nothing to show
         </label>
+        <label className="flex items-center gap-2 text-xs text-neutral-400">
+          <input
+            type="checkbox"
+            checked={s.hideAdd ?? false}
+            onChange={(e) => onChange({ ...s, hideAdd: e.target.checked })}
+          />
+          No &quot;+ Add&quot; row (read-only card)
+        </label>
         <SortField
           value={s.sortOverride}
           onChange={(sortOverride) => onChange({ ...s, sortOverride })}
