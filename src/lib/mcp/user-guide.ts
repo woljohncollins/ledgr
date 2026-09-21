@@ -733,9 +733,13 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
   phrases, \`OR\`, and \`-exclusions\`, plus filters.
 - **Agenda views drag between days.** An agenda view (tasks grouped under a day
   divider) lets you drag any row onto another day, including an empty one in the
-  next two weeks, to plan it there. It moves the scheduled day, not the deadline,
-  unless the view is a due-date view. Drop on "No date" to clear it. On a phone,
-  hold a row for a moment, then drag.
+  next two weeks, to move it there. A drop sets the task's date, both its start
+  and its due day, to that day. Drop on "No date" to clear it. On a phone, hold a
+  row for a moment, then drag.
+- **Unfinished tasks roll forward every night.** A little after 1:00 AM Eastern,
+  any open task whose day has passed is moved to today, and today becomes its new
+  due date. Nothing is left behind in yesterday. The "Roll N overdue" button on
+  Today does the same thing on demand.
 - **Sort a table by clicking its header.** On a table view, the Title header
   and every date, urgency, and custom-property column header are links: click
   once to sort ascending, again to flip. The arrow marks the active column. It

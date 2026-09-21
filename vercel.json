@@ -11,6 +11,10 @@
     {
       "path": "/api/machine/relatedness",
       "schedule": "0 9 * * *"
+    },
+    {
+      "path": "/api/machine/roll-overdue",
+      "schedule": "5 5 * * *"
     }
   ]
 }

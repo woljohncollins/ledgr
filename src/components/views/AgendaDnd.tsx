@@ -84,9 +84,12 @@ export default function AgendaDnd({
     if (currentDayOf(id) === day) return;
     const before = currentDayOf(id);
     setMoves((m) => ({ ...m, [id]: day }));
-    const body: Record<string, unknown> = {
-      [dateField]: day === AGENDA_UNDATED ? null : dayIso(day),
-    };
+    // John works with ONE date per task: the due date is the start date. So a
+    // drop on a plan/scheduled view moves both together; a due-date view does
+    // the same. (2026-09-21: "I use the due date as the start date and due date.")
+    const value = day === AGENDA_UNDATED ? null : dayIso(day);
+    const body: Record<string, unknown> = { scheduledDate: value, dueDate: value };
+    void dateField;
     fetch(`/api/items/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
