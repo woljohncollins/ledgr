@@ -23,6 +23,7 @@ import DashboardGridLayout from "./DashboardGridLayout";
 import StageBackground from "./StageBackground";
 import { FloatingMenu, usePopoverPosition } from "./floating-menu";
 import { showToast } from "@/components/ui/ActionToast";
+import SearchBar from "@/components/search/SearchBar";
 import {
   buildActionWidget,
   buildContainerWidget,
@@ -499,6 +500,10 @@ export default function DashboardClient({
           ) : showTitle ? (
             <h1 className="ui-title">{name}</h1>
           ) : null}
+          {/* One-line search under the title (2026-09-20): Enter hands the words
+              to /search. Hidden in edit mode so it never competes with the
+              name field and the widget grid controls. */}
+          {!editMode && <SearchBar className="mt-3" />}
         </div>
         <div className="mt-2 flex flex-wrap items-center justify-end gap-2 text-sm">
           {focusTitle && (

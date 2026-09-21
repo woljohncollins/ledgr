@@ -8,6 +8,8 @@ import ViewRenderer from "@/components/views/ViewRenderer";
 import { DeskHostProvider } from "@/components/desk/DeskHostContext";
 import DuplicateViewButton from "@/components/views/DuplicateViewButton";
 import NewItemButton from "@/components/home/NewItemButton";
+import SearchBar from "@/components/search/SearchBar";
+import { parseSortParam } from "@/lib/view-sort-param";
 import BulkActionBar from "@/components/selection/BulkActionBar";
 import SelectionProvider from "@/components/selection/SelectionProvider";
 import SelectModeToggle from "@/components/selection/SelectModeToggle";
@@ -52,7 +54,23 @@ export default async function ViewPage({ params, searchParams }: Context) {
     throw err;
   }
 
-  const items = await queryViewItems(owner.id, view.filter, view.sort);
+  // Load the view's type once: it powers the board's column order, the labels
+  // for custom-property columns, and the numeric hint for a click-to-sort on a
+  // number property.
+  const type = view.filter.type
+    ? await getType(view.filter.type).catch(() => null)
+    : null;
+
+  // Click-to-sort (2026-09-20): a table header link sets ?sort=&dir=, which
+  // overrides the stored sort for this render only. Invalid or absent → the
+  // view's own sort, so the saved definition is never touched.
+  const numericKeys = new Set(
+    (type?.propertySchema ?? []).filter((p) => p.kind === "number").map((p) => p.key)
+  );
+  const sortOverride = parseSortParam(sp.sort, sp.dir, numericKeys);
+  const activeSort = sortOverride ?? view.sort;
+
+  const items = await queryViewItems(owner.id, view.filter, activeSort);
   const rollups = await childRollups(owner.id, items.map((i) => i.id));
   const tz = await getAppTimezone(owner.id);
   // Rich project cards (2026-08-17): a project-scoped list/board view renders
@@ -71,12 +89,6 @@ export default async function ViewPage({ params, searchParams }: Context) {
     const win = overlayWindow(month);
     calendarEvents = await listCalendarEventsForRange(owner.id, win.start, win.end);
   }
-
-  // Load the view's type once: it powers both the board's column order (group
-  // by a custom property) and the labels for any custom-property columns.
-  const type = view.filter.type
-    ? await getType(view.filter.type).catch(() => null)
-    : null;
 
   // For a board grouped by a custom property, order its columns by the type's
   // option list (a workflow board reads Applied → Interview → Offer, not
@@ -173,6 +185,7 @@ export default async function ViewPage({ params, searchParams }: Context) {
         <p className="mt-1 text-sm text-neutral-500">
           {items.length} item{items.length === 1 ? "" : "s"} · {view.layout}
         </p>
+        <SearchBar className="mt-4" />
 
         <SelectionProvider ids={items.map((item) => item.id)}>
           {/* Board/calendar render no row checkboxes (ADR-118), so they get no
@@ -201,6 +214,7 @@ export default async function ViewPage({ params, searchParams }: Context) {
               today={appTodayYmd(new Date(), tz)}
               tz={tz}
               projectCards={projectCards ?? undefined}
+              tableSort={{ active: activeSort, basePath: `/views/${view.id}` }}
             />
           </DeskHostProvider>
           <BulkActionBar {...(type ? bulkConfigForType(type) : {})} />

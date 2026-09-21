@@ -725,8 +725,15 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
 - **Recent searches.** Both the palette (with the box empty) and \`/search\`
   (before you've searched) show your last searches as clickable rows or chips,
   so you can jump back into one without retyping it.
+- **Search box on every view and dashboard.** Under the title of a saved view
+  (\`/views\`) or a dashboard, including Home, there is a one-line search box.
+  Type and press Enter to land on \`/search\` with those words already run.
 - **Advanced search** (\`/search\`) — full text over titles and bodies with
   phrases, \`OR\`, and \`-exclusions\`, plus filters.
+- **Sort a table by clicking its header.** On a table view, the Title header
+  and every date, urgency, and custom-property column header are links: click
+  once to sort ascending, again to flip. The arrow marks the active column. It
+  changes only what you see; the view's saved sort is untouched.
 - **Save search.** On \`/search\`, once you have a query or filters set, **Save
   search** names and keeps the whole search (words, filters, and Tune
   criteria). Saved searches sync across your devices, show as chips on
