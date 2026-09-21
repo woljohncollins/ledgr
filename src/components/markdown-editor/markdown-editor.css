@@ -97,6 +97,14 @@
 .ledgr-prose ul[data-type="taskList"] li > div > p {
   margin: 0;
 }
+/* A ticked checklist item reads as done: struck through and dimmed, in the
+   editor (tiptap sets data-checked) and in read-only prose (the rendered
+   task-list-item carries a checked input). */
+.ledgr-prose ul[data-type="taskList"] li[data-checked="true"] > div,
+.ledgr-prose li.task-list-item:has(> input[type="checkbox"]:checked) {
+  text-decoration: line-through;
+  color: #737373;
+}
 
 /* Dark-mode task checkboxes (v5): a gray ring on a dark fill that turns the
    highlight blue with a white check when ticked. Covers the editor's task

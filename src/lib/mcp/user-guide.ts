@@ -754,6 +754,12 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
   "Fit height to contents" and the card grows and shrinks with its rows (up to ten
   rows, then it scrolls) instead of holding a fixed height. Cards below it slide
   up to fill the space.
+- **Hand-ordered dashboard lists.** A compact view card sorted by a NUMERIC
+  custom property ascending (view sort { field:"property", propertyKey, numeric:true,
+  dir:"asc" }) is drag-to-reorder: drag a row above or below another and that
+  property is rewritten (midpoint of its new neighbours) so the order sticks. The
+  "Who needs a call" card orders people this way on person.callorder. To make any
+  list hand-orderable, add a number property to the type and sort the view by it.
 - **Dashboard cards can hide when empty.** In a view widget's gear, tick "Hide this
   card when it has nothing to show" and the card drops out of the grid until its
   view has items again. Edit mode always shows every card.
