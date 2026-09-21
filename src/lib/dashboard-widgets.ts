@@ -32,6 +32,9 @@ export type ViewWidgetSettings = {
   itemLimit: number | null; // null = the dashboard's default preview cap
   sortOverride: ListSort | null; // null = the view's stored sort (may be a property sort)
   renderStyle: RenderStyle;
+  // Skip the whole card when the view matches nothing (2026-09-21, John: an
+  // empty "Overdue" box is noise). Edit mode always shows it so it can be found.
+  hideWhenEmpty?: boolean;
 };
 
 // Stat/count card: a single number from a view's filter (countViewItems).

@@ -731,11 +731,16 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
   Type and press Enter to land on \`/search\` with those words already run.
 - **Advanced search** (\`/search\`) — full text over titles and bodies with
   phrases, \`OR\`, and \`-exclusions\`, plus filters.
-- **Agenda views drag between days.** An agenda view (tasks grouped under a day
-  divider) lets you drag any row onto another day, including an empty one in the
-  next two weeks, to move it there. A drop sets the task's date, both its start
-  and its due day, to that day. Drop on "No date" to clear it. On a phone, hold a
-  row for a moment, then drag.
+- **Agenda views drag between days and into order.** An agenda view (tasks
+  grouped under a day divider) lists each day highest priority first: P1, then P2,
+  then P3, then unranked. Drag any row onto another day, including an empty one in
+  the next two weeks, or to a new spot within a day. A drop sets the task's date
+  (start and due together) and, when you drop it among other tasks, it takes the
+  priority of the tasks it lands next to and keeps that position. Drop on "No
+  date" to clear the date. On a phone, hold a row for a moment, then drag.
+- **Dashboard cards can hide when empty.** In a view widget's gear, tick "Hide this
+  card when it has nothing to show" and the card drops out of the grid until its
+  view has items again. Edit mode always shows every card.
 - **Unfinished tasks roll forward every night.** A little after 1:00 AM Eastern,
   any open task whose day has passed is moved to today, and today becomes its new
   due date. Nothing is left behind in yesterday. The "Roll N overdue" button on

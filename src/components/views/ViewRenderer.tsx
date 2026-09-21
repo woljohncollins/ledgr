@@ -174,8 +174,10 @@ function StatusChip({ status, statuses }: { status: string; statuses?: StatusDef
   );
 }
 
+// Priorities 1–3 show as a chip (John, 2026-09-21: three priorities like Outlook,
+// High / Normal / Low = P1 / P2 / P3). P4–P6 stay quiet as before.
 function UrgencyChip({ urgency }: { urgency: number | null }) {
-  if (urgency == null || urgency > 2) return null;
+  if (urgency == null || urgency > 3) return null;
   return (
     <span className="shrink-0 rounded bg-amber-950 px-1.5 text-xs text-amber-400">
       {`P${urgency}`}
@@ -907,6 +909,13 @@ function AgendaLayout({
     }
     const row = (item: ViewItem): AgendaRow => ({
       id: item.id,
+      urgency: item.urgency,
+      // Manual order within a day (properties.dayorder), set by the agenda drag.
+      order: (() => {
+        const p = item.properties as Record<string, unknown> | null;
+        const v = p?.dayorder;
+        return typeof v === "number" && Number.isFinite(v) ? v : null;
+      })(),
       node: (
         <ItemRow
           key={item.id}
