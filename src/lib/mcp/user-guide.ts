@@ -738,6 +738,9 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
   (start and due together) and, when you drop it among other tasks, it takes the
   priority of the tasks it lands next to and keeps that position. Drop on "No
   date" to clear the date. On a phone, hold a row for a moment, then drag.
+- **One date per task.** Type a start day or a due day on a task and the other
+  is set to match automatically. A task always has one day, which is both when
+  you plan to do it and when it is due.
 - **Priorities P1, P2, P3.** A task row is tinted blue for P1, green for P2, and
   yellow for P3, with a matching chip. To change one, right-click the row (or
   long-press on a phone) and pick P1, P2, P3, or the dash for none. The same menu's
