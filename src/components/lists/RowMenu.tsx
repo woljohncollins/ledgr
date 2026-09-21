@@ -35,6 +35,8 @@ export type RowMenuOptions = {
   today?: string;
   focused?: boolean;
   label?: string; // for the toast text ("<label> moved to Trash")
+  // Current priority (1-3, or null) so the Priority row can mark the active one.
+  urgency?: number | null;
 };
 
 type Pos = { x: number; y: number };
@@ -44,7 +46,7 @@ function ymdToIso(ymd: string): string {
 }
 
 export function useRowMenu(opts: RowMenuOptions) {
-  const { id, canComplete = false, done = false, today, focused = false, label } = opts;
+  const { id, canComplete = false, done = false, today, focused = false, label, urgency = null } = opts;
   const router = useRouter();
   const [pos, setPos] = useState<Pos | null>(null);
   const [scheduleOpen, setScheduleOpen] = useState(false);
@@ -128,8 +130,12 @@ export function useRowMenu(opts: RowMenuOptions) {
       patch({ propertyPatch: { focus: focused ? null : { date: today, order: Date.now() } } })
     );
 
+  // One date per task (John, 2026-09-21): a quick date sets start AND due together.
   const schedule = (ymd: string | null) =>
-    run(() => patch({ scheduledDate: ymd ? ymdToIso(ymd) : null }));
+    run(() => patch({ scheduledDate: ymd ? ymdToIso(ymd) : null, dueDate: ymd ? ymdToIso(ymd) : null }));
+
+  // Priority P1/P2/P3 (or none), written to urgency.
+  const setPriority = (p: number | null) => run(() => patch({ urgency: p }));
 
   const trash = () =>
     run(() => fetch(`/api/items/${id}`, { method: "DELETE" }), {
@@ -212,6 +218,34 @@ export function useRowMenu(opts: RowMenuOptions) {
         >
           {focused ? "☆ Unfocus" : "★ Focus today"}
         </button>
+      )}
+      {canComplete && (
+        <div className="flex items-center gap-1 px-2 py-1.5 text-sm text-ink">
+          <span className="mr-1">Priority</span>
+          {[1, 2, 3].map((p) => (
+            <button
+              key={p}
+              type="button"
+              role="menuitemradio"
+              onClick={() => setPriority(p)}
+              aria-checked={urgency === p}
+              className={`rounded px-2 py-0.5 text-xs font-medium ${
+                p === 1 ? "bg-blue-900/60 text-blue-300" : p === 2 ? "bg-green-900/60 text-green-300" : "bg-yellow-900/60 text-yellow-300"
+              } ${urgency === p ? "ring-1 ring-white/70" : "opacity-70 hover:opacity-100"}`}
+            >
+              P{p}
+            </button>
+          ))}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => setPriority(null)}
+            className={`rounded px-2 py-0.5 text-xs text-ink-subtle hover:text-ink ${urgency == null ? "ring-1 ring-white/40" : ""}`}
+            title="No priority"
+          >
+            –
+          </button>
+        </div>
       )}
       {canComplete && (
         <div>
