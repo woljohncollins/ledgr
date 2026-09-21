@@ -742,6 +742,11 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
   yellow for P3, with a matching chip. To change one, right-click the row (or
   long-press on a phone) and pick P1, P2, P3, or the dash for none. The same menu's
   quick dates set the task's start and due day together.
+- **Focused today card.** A dashboard card over a "focused today" view lists
+  what you starred for today. Drag a task from a day list onto it to focus it;
+  drag a focused task back onto a day to unfocus it and give it that day. A day
+  list can be told to hide focused tasks (view filter excludeFocusedToday) so each
+  task shows in one place. Desktop mouse drag; on a phone use the row menu.
 - **Dashboard cards can hide when empty.** In a view widget's gear, tick "Hide this
   card when it has nothing to show" and the card drops out of the grid until its
   view has items again. Edit mode always shows every card.
