@@ -11,6 +11,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { useState } from "react";
 import { useRowMenu } from "@/components/lists/RowMenu";
 import SubtaskCheckbox from "@/components/subtasks/SubtaskCheckbox";
 import ViewRenderer, { type ViewItem } from "@/components/views/ViewRenderer";
@@ -59,6 +60,9 @@ function ItemRow({
   related,
   today,
   draggable = false,
+  onDragOver,
+  onDrop,
+  dropHint = null,
 }: {
   item: ViewItem;
   assoc?: Assoc;
@@ -66,6 +70,10 @@ function ItemRow({
   today?: string;
   // Focus card rows (2026-09-21): drag one onto the day list to unfocus it there.
   draggable?: boolean;
+  // Manual-order cards (2026-09-21): rows are drop targets for reordering.
+  onDragOver?: (e: React.DragEvent<HTMLLIElement>) => void;
+  onDrop?: (e: React.DragEvent<HTMLLIElement>) => void;
+  dropHint?: "above" | "below" | null;
 }) {
   const done = item.statusCategory === "done";
   const isTask = item.type === "task";
@@ -79,8 +87,16 @@ function ItemRow({
   });
   return (
     <li
-      className={`flex items-center gap-2 rounded px-1.5 py-1 hover:bg-surface-2 ${draggable ? "cursor-grab active:cursor-grabbing" : ""}`}
+      className={`relative flex items-center gap-2 rounded px-1.5 py-1 hover:bg-surface-2 ${draggable ? "cursor-grab active:cursor-grabbing" : ""} ${
+        dropHint === "above"
+          ? "shadow-[inset_0_2px_0_0_var(--color-accent,#3b82f6)]"
+          : dropHint === "below"
+            ? "shadow-[inset_0_-2px_0_0_var(--color-accent,#3b82f6)]"
+            : ""
+      }`}
       draggable={draggable || undefined}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
       onDragStart={
         draggable
           ? (e) => {
@@ -161,6 +177,89 @@ export default function WidgetBody({
         if (res.ok) router.refresh();
       })
       .catch(() => {});
+  };
+
+  // Manual-order card (2026-09-21, John: "people who need a call should be drag
+  // and drop for priority in the list"). Any compact view widget whose effective
+  // sort is a NUMERIC property ascending is hand-orderable: drag a row above or
+  // below another and the property (e.g. person.callorder) is rewritten as the
+  // midpoint of its new neighbours, so the view's own sort keeps the order.
+  const vs = data.view?.sort;
+  const orderKey =
+    widget.kind === "view" &&
+    !isFocusCard &&
+    !editMode &&
+    !!today &&
+    vs &&
+    vs.field === "property" &&
+    vs.numeric === true &&
+    vs.dir === "asc"
+      ? vs.propertyKey
+      : null;
+  const [localOrder, setLocalOrder] = useState<{ src: ViewItem[]; ids: string[] } | null>(null);
+  const [hint, setHint] = useState<{ id: string; side: "above" | "below" } | null>(null);
+  const orderedIds =
+    localOrder && localOrder.src === data.items ? localOrder.ids : data.items.map((it) => it.id);
+  const byId = new Map(data.items.map((it) => [it.id, it]));
+  const orderedItems = orderedIds.map((id) => byId.get(id)).filter((it): it is ViewItem => !!it);
+  const orderVal = (it: ViewItem | undefined): number | null => {
+    if (!it || !orderKey) return null;
+    const props = it.properties as Record<string, unknown> | null;
+    const n = Number(props?.[orderKey]);
+    return Number.isFinite(n) ? n : null;
+  };
+  const patchOrder = (id: string, value: number) =>
+    fetch(`/api/items/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ propertyPatch: { [orderKey as string]: value } }),
+    });
+  const reorderTo = (dragId: string, index: number) => {
+    if (!orderKey) return;
+    const ids = orderedIds.filter((x) => x !== dragId);
+    const at = Math.max(0, Math.min(index, ids.length));
+    ids.splice(at, 0, dragId);
+    if (ids.join() === orderedIds.join()) return;
+    setLocalOrder({ src: data.items, ids });
+    const prev = orderVal(byId.get(ids[at - 1] ?? ""));
+    const next = orderVal(byId.get(ids[at + 1] ?? ""));
+    let writes: Promise<Response>[];
+    if (at === 0 && next != null) writes = [patchOrder(dragId, next - 1000)];
+    else if (at === ids.length - 1 && prev != null) writes = [patchOrder(dragId, prev + 1000)];
+    else if (prev != null && next != null && next - prev > 1e-6) writes = [patchOrder(dragId, (prev + next) / 2)];
+    else writes = ids.map((id, i) => patchOrder(id, (i + 1) * 1000)); // renumber the lot
+    Promise.all(writes)
+      .then(() => router.refresh())
+      .catch(() => {});
+  };
+  const rowDragOver = (id: string) => (e: React.DragEvent<HTMLLIElement>) => {
+    if (!orderKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "move";
+    const r = e.currentTarget.getBoundingClientRect();
+    const side = e.clientY < r.top + r.height / 2 ? "above" : "below";
+    if (!hint || hint.id !== id || hint.side !== side) setHint({ id, side });
+  };
+  const rowDrop = (id: string) => (e: React.DragEvent<HTMLLIElement>) => {
+    if (!orderKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setHint(null);
+    const dragId = e.dataTransfer.getData("text/plain");
+    if (!dragId || !byId.has(dragId) || dragId === id) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    const before = e.clientY < r.top + r.height / 2;
+    const targetIdx = orderedIds.filter((x) => x !== dragId).indexOf(id);
+    reorderTo(dragId, before ? targetIdx : targetIdx + 1);
+  };
+  const listDrop = (e: React.DragEvent) => {
+    if (!orderKey) return;
+    e.preventDefault();
+    setHint(null);
+    const dragId = e.dataTransfer.getData("text/plain");
+    if (!dragId || !byId.has(dragId)) return;
+    reorderTo(dragId, orderedIds.length);
   };
 
   if (widget.kind === "stat") {
@@ -368,17 +467,32 @@ export default function WidgetBody({
     <div className="flex h-full min-h-0 flex-col">
       <ul
         className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2"
-        onDragOver={isFocusCard ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; } : undefined}
-        onDrop={isFocusCard ? focusDrop : undefined}
+        onDragOver={
+          isFocusCard || orderKey
+            ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }
+            : undefined
+        }
+        onDrop={isFocusCard ? focusDrop : orderKey ? listDrop : undefined}
+        onDragLeave={orderKey ? () => setHint(null) : undefined}
       >
-        {data.items.length > 0 ? (
-          data.items.map((item) => {
+        {orderedItems.length > 0 ? (
+          orderedItems.map((item) => {
             const rel = data.related?.[item.id] ?? [];
             // Prefer a non-task association (the person/meeting/project a task is
             // tagged to) for the chip; fall back to the first related item.
             const assoc = rel.find((r) => r.type !== "task") ?? rel[0];
             return (
-              <ItemRow key={item.id} item={item} assoc={assoc} related={rel} today={today} draggable={isFocusCard} />
+              <ItemRow
+                key={item.id}
+                item={item}
+                assoc={assoc}
+                related={rel}
+                today={today}
+                draggable={isFocusCard || !!orderKey}
+                onDragOver={orderKey ? rowDragOver(item.id) : undefined}
+                onDrop={orderKey ? rowDrop(item.id) : undefined}
+                dropHint={hint?.id === item.id ? hint.side : null}
+              />
             );
           })
         ) : (
