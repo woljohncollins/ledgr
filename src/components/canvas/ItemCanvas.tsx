@@ -85,7 +85,7 @@ export default async function ItemCanvas({
   // still drops over this row.
   const stickyChrome = showBreadcrumb && variant === "page";
   const chromeRowSticky = stickyChrome
-    ? "sm:sticky sm:top-[var(--nav-pt,0px)] sm:z-[35] sm:h-[var(--item-chrome-h)] sm:bg-surface-0 sm:pt-0"
+    ? "sm:sticky sm:top-[calc(var(--nav-pt,0px)_+_var(--safe-top))] sm:z-[35] sm:h-[var(--item-chrome-h)] sm:bg-surface-0 sm:pt-0"
     : "sm:pt-6";
 
   // Star state for the actions menu (page chrome only; the modal's menu resolves

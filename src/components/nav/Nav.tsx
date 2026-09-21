@@ -128,20 +128,28 @@ export default async function Nav() {
     inboxCount > 0 ||
     INBOX_SOURCES.some((s) => routeFor(settings.inboxRoutes, s.key).inbox);
   const keep = (d: { href: string }) => showInbox || d.href !== "/inbox";
-  const shellSlots = (config: NavSlotConfig[]) =>
+  // Each shell slot remembers its index in the stored list (configIndex) so the
+  // phone bar's drag-to-reorder can write the move back; the hidden-Inbox
+  // filter runs after the index is taken, so positions stay honest.
+  const shellSlots = (config: NavSlotConfig[]): ShellSlot[] =>
     config
-      .filter((s) => s.type === "tools" || keep(s))
-      .map((s) => (s.type === "tools" ? { ...s, children: s.children.filter(keep) } : s))
-      .map(toShellSlot);
+      .map((s, configIndex) => ({ s, configIndex }))
+      .filter(({ s }) => s.type === "tools" || keep(s))
+      .map(({ s, configIndex }) => ({
+        ...toShellSlot(s.type === "tools" ? { ...s, children: s.children.filter(keep) } : s),
+        configIndex,
+      }));
 
   const slots = shellSlots(settings.navSlots);
   // null mobileNavSlots mirrors the desktop list.
-  const mobileSlots = shellSlots(settings.mobileNavSlots ?? settings.navSlots);
+  const mobileNavConfig = settings.mobileNavSlots ?? settings.navSlots;
+  const mobileSlots = shellSlots(mobileNavConfig);
 
   return (
     <NavShell
       slots={slots}
       mobileSlots={mobileSlots}
+      mobileNavConfig={mobileNavConfig}
       unreadCount={unreadCount}
       typeOptions={typeRows}
       buildTypes={buildTypes.map((t) => ({ key: t.key, label: t.label, icon: t.icon }))}

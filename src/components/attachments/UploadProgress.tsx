@@ -68,7 +68,7 @@ export default function UploadProgress() {
     // Top-center (Tyler, 2026-08-29 — after bottom-right, then bottom-center):
     // nothing else claims the top edge mid-typing, and on mobile the keyboard
     // owns the bottom half, so this is the spot a transient bar is actually seen.
-    <div className="pointer-events-none fixed inset-x-0 top-3 z-[60] mx-auto flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2">
+    <div className="pointer-events-none fixed inset-x-0 top-[calc(0.75rem+var(--safe-top))] z-[60] mx-auto flex w-80 max-w-[calc(100vw-2rem)] flex-col gap-2">
       {[...jobs.values()].map((j) => {
         const pct = Math.round(j.fraction * 100);
         return (

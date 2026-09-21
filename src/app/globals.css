@@ -7,6 +7,13 @@
    the tokens or neutral classes and never hardcode a background, so one class
    re-skins the whole app. Palette shadows Notion's dark mode. */
 :root {
+  /* iOS safe areas (installed PWA, status bar black-translucent + viewport-fit
+     cover, see layout.tsx): the web view paints under the status bar and the
+     home indicator, so surfaces pinned to a screen edge add these. One name
+     each so a Tailwind arbitrary value stays short (top-[var(--safe-top)]).
+     0 everywhere else. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
   /* Setting color-scheme globally makes the browser's native controls
      (scrollbars, date/select pickers, form fields) follow the theme without
      depending on Tailwind's @layer base winning the CSS load-order race, which
@@ -341,15 +348,28 @@ body {
    fixed bottom clearance; the docked top bar / side rail padding only applies
    at the sm+ breakpoint where those positions render. */
 body {
+  /* The status bar: nothing else pads the top on a phone, so without this the
+     first row of every page (the item canvas chrome, a list's header) sat
+     under the iPhone clock on a home-screen launch. Fixed overlays don't
+     inherit it and add --safe-top themselves. */
+  padding-top: var(--safe-top);
   /* The bar row pads itself out by env(safe-area-inset-bottom), so on a device
      with a home indicator the bar is that much TALLER than the flat 6rem this
      used to reserve — and the last row of a list ended up behind it. Reserve
      the inset here too so the clearance always matches the rendered bar. */
   padding-bottom: calc(6rem + env(safe-area-inset-bottom));
 }
+/* Installed on a phone, the document rubber-bands at both ends and drags the
+   fixed bars with it, which reads as the bottom bar stretching or slipping
+   off-screen. Apps don't bounce; neither does this one when installed. */
+@media (display-mode: standalone) {
+  html {
+    overscroll-behavior-y: none;
+  }
+}
 @media (min-width: 640px) {
   body {
-    padding-top: var(--nav-pt, 0px);
+    padding-top: calc(var(--nav-pt, 0px) + var(--safe-top));
     padding-bottom: var(--nav-pb, 0px);
     padding-left: var(--nav-pl, 0px);
     padding-right: var(--nav-pr, 0px);

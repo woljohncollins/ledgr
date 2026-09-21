@@ -378,7 +378,7 @@ export default function TypeBuilder({
         <div
           role="status"
           aria-live="polite"
-          className="pointer-events-none fixed inset-x-0 top-6 z-[70] flex justify-center"
+          className="pointer-events-none fixed inset-x-0 top-[calc(1.5rem+var(--safe-top))] z-[70] flex justify-center"
         >
           <div className="flex items-center gap-2 rounded-full border border-green-700/60 bg-neutral-900/95 px-4 py-2 text-sm font-medium text-green-300 shadow-xl shadow-black/40 backdrop-blur">
             <svg

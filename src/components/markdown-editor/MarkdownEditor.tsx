@@ -19,7 +19,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useAnchoredPanel } from "@/components/ui/Popover";
 import { TOOLBAR_ICONS } from "./toolbar-icons";
-import { useKeyboardInset } from "./useKeyboardInset";
+import { useKeyboardInset, useKeyboardVisible } from "./useKeyboardInset";
 import { useIsDesktop } from "./useIsDesktop";
 import { useRouter } from "next/navigation";
 import { openItem } from "@/lib/item-nav";
@@ -1199,6 +1199,18 @@ export default function MarkdownEditor({
       delete document.body.dataset.editing;
     };
   }, [editor]);
+  // iOS: the keyboard's dismiss button hides the keyboard but leaves the
+  // editor focused, so the nav bar (hidden via body[data-editing]) stayed
+  // gone and the formatting bar sat at the bottom edge with nothing to type
+  // on. Treat the keyboard closing while focused as leaving the editor.
+  const keyboardVisible = useKeyboardVisible();
+  const keyboardWasVisible = useRef(false);
+  useEffect(() => {
+    if (keyboardWasVisible.current && !keyboardVisible && focused && editor && !isDesktop) {
+      editor.commands.blur();
+    }
+    keyboardWasVisible.current = keyboardVisible;
+  }, [keyboardVisible, focused, editor, isDesktop]);
 
   if (!editor || !toolbar) {
     return (

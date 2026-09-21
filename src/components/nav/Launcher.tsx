@@ -78,7 +78,15 @@ export default function Launcher({
   useLayoutEffect(() => {
     const el = grid.current;
     if (!el) return;
-    const measure = () => setReveal(el.offsetHeight);
+    // Skip 0: while the markdown editor is focused on a phone the whole panel
+    // is display:none (body[data-editing], globals.css) and the grid measures
+    // 0, which would make the CLOSED position translateY(0) — fully open. On
+    // iOS the bar then re-entered as the entire drawer sliding shut. Keep the
+    // last real height instead; the observer re-measures once it's visible.
+    const measure = () => {
+      const h = el.offsetHeight;
+      if (h > 0) setReveal(h);
+    };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(el);

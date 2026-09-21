@@ -479,7 +479,7 @@ export default function FloatingToc({
   const layer = (children?: React.ReactNode) => (
     <div
       ref={rootRef}
-      className="pointer-events-none sticky top-[var(--nav-pt,0px)] z-40 h-0 sm:top-[calc(var(--nav-pt,0px)_+_var(--item-chrome-h,0px))]"
+      className="pointer-events-none sticky top-[calc(var(--nav-pt,0px)_+_var(--safe-top))] z-40 h-0 sm:top-[calc(var(--nav-pt,0px)_+_var(--item-chrome-h,0px)_+_var(--safe-top))]"
     >
       {children}
     </div>

@@ -109,7 +109,8 @@ a "topic") alongside tag whenever one grouping axis isn't enough.
 - **Command palette:** **Ctrl/⌘+K** anywhere. Searches your items, pages, saved
   views, types, Build sections and settings at once.
 - **Quick capture:** press **q** anywhere, or the **+ New** button in the nav.
-- **The nav bar:** yours to arrange, at \`/build/navigation\`.
+- **The nav bar:** yours to arrange, at \`/build/navigation\`. On a phone, hold an
+  icon on the bottom bar and drag it sideways to reorder the bar in place.
 
 # Capturing things
 
