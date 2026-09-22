@@ -14,6 +14,10 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useRowMenu } from "@/components/lists/RowMenu";
 import SubtaskCheckbox from "@/components/subtasks/SubtaskCheckbox";
+import ContactedCheck, {
+  contactAge,
+  lastContactOf,
+} from "@/components/people/ContactedCheck";
 import ViewRenderer, { type ViewItem } from "@/components/views/ViewRenderer";
 import { useTimezone } from "@/components/providers/TimezoneProvider";
 import ActionWidgetBody from "./ActionWidgetBody";
@@ -77,6 +81,10 @@ function ItemRow({
 }) {
   const done = item.statusCategory === "done";
   const isTask = item.type === "task";
+  // A person row gets the contacted tick instead of a completion circle: a
+  // person is never "done", they are contacted and then due again.
+  const isPerson = item.type === "person";
+  const lastContact = isPerson ? lastContactOf(item.properties) : null;
   const extra = related && related.length > 1 ? related.length - 1 : 0;
   const { handlers, menu } = useRowMenu({
     id: item.id,
@@ -112,6 +120,11 @@ function ItemRow({
           <SubtaskCheckbox id={item.id} done={done} />
         </span>
       )}
+      {isPerson && today && (
+        <span className="cancel-drag shrink-0">
+          <ContactedCheck itemId={item.id} lastContact={lastContact} today={today} />
+        </span>
+      )}
       <Link
         href={`/items/${item.id}`}
         className={`cancel-drag min-w-0 flex-1 truncate text-sm ${
@@ -130,8 +143,18 @@ function ItemRow({
           {extra ? ` +${extra}` : ""}
         </Link>
       )}
-      <span className="shrink-0 text-xs text-ink-subtle">
-        {item.dueDate ? dueFmt.format(item.dueDate) : ""}
+      <span
+        className={`shrink-0 text-xs ${
+          isPerson && !lastContact ? "text-[var(--accent)]" : "text-ink-subtle"
+        }`}
+      >
+        {isPerson
+          ? today
+            ? (contactAge(lastContact, today) ?? "never")
+            : ""
+          : item.dueDate
+            ? dueFmt.format(item.dueDate)
+            : ""}
       </span>
       {menu}
     </li>
