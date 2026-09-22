@@ -11,6 +11,13 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { focusOf } from "@/lib/focus";
+
+// A fresh focus order for a task dropped into the focus card: the drop instant,
+// the same "later picks sort after earlier ones" scheme FocusStar uses. Kept out
+// of the component so the React compiler's purity lint doesn't read the clock
+// call as happening during render (it's only ever called from a drop handler).
+const nextFocusOrder = () => Date.now();
 import { useState } from "react";
 import { useRowMenu } from "@/components/lists/RowMenu";
 import SubtaskCheckbox from "@/components/subtasks/SubtaskCheckbox";
@@ -185,6 +192,9 @@ export default function WidgetBody({
   // The Focused-today card (2026-09-21): a view whose filter is focusedToday. Its
   // rows drag out (to the day list, which unfocuses them) and it accepts drops of
   // any task row (from the agenda), day-stamping the task into today's focus.
+  // Its own rows also reorder by drag (2026-09-22, John: "drag and drop on the
+  // focused today list as well"): the marker's `order` is rewritten with the
+  // same midpoint scheme the manual-order cards use, and the card sorts by it.
   const isFocusCard = widget.kind === "view" && !!data.view?.filter.focusedToday && !!today;
   const focusDrop = (e: React.DragEvent) => {
     e.preventDefault();
@@ -194,7 +204,7 @@ export default function WidgetBody({
     fetch(`/api/items/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ propertyPatch: { focus: { date: today, order: Date.now() } } }),
+      body: JSON.stringify({ propertyPatch: { focus: { date: today, order: nextFocusOrder() } } }),
     })
       .then((res) => {
         if (res.ok) router.refresh();
@@ -219,26 +229,44 @@ export default function WidgetBody({
     vs.dir === "asc"
       ? vs.propertyKey
       : null;
+  // The focus card reorders too (see isFocusCard): its order lives in
+  // properties.focus.order, so it reads/writes that instead of a property key.
+  const focusReorder = isFocusCard && !editMode;
+  const reorderable = focusReorder || !!orderKey;
   const [localOrder, setLocalOrder] = useState<{ src: ViewItem[]; ids: string[] } | null>(null);
   const [hint, setHint] = useState<{ id: string; side: "above" | "below" } | null>(null);
-  const orderedIds =
-    localOrder && localOrder.src === data.items ? localOrder.ids : data.items.map((it) => it.id);
-  const byId = new Map(data.items.map((it) => [it.id, it]));
-  const orderedItems = orderedIds.map((id) => byId.get(id)).filter((it): it is ViewItem => !!it);
   const orderVal = (it: ViewItem | undefined): number | null => {
-    if (!it || !orderKey) return null;
+    if (!it) return null;
+    if (isFocusCard) return focusOf(it.properties)?.order ?? null;
+    if (!orderKey) return null;
     const props = it.properties as Record<string, unknown> | null;
     const n = Number(props?.[orderKey]);
     return Number.isFinite(n) ? n : null;
   };
+  // Server order, except the focus card, which sorts by the marker's order (as
+  // the fixed Today home does) so a hand-made order survives the refresh.
+  // Unordered markers keep their server position after the ordered ones.
+  const serverIds = isFocusCard
+    ? data.items
+        .map((it, i) => ({ id: it.id, i, o: orderVal(it) ?? Number.MAX_SAFE_INTEGER }))
+        .sort((a, b) => a.o - b.o || a.i - b.i)
+        .map((x) => x.id)
+    : data.items.map((it) => it.id);
+  const orderedIds = localOrder && localOrder.src === data.items ? localOrder.ids : serverIds;
+  const byId = new Map(data.items.map((it) => [it.id, it]));
+  const orderedItems = orderedIds.map((id) => byId.get(id)).filter((it): it is ViewItem => !!it);
   const patchOrder = (id: string, value: number) =>
     fetch(`/api/items/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ propertyPatch: { [orderKey as string]: value } }),
+      body: JSON.stringify({
+        propertyPatch: isFocusCard
+          ? { focus: { date: today, order: value } }
+          : { [orderKey as string]: value },
+      }),
     });
   const reorderTo = (dragId: string, index: number) => {
-    if (!orderKey) return;
+    if (!reorderable) return;
     const ids = orderedIds.filter((x) => x !== dragId);
     const at = Math.max(0, Math.min(index, ids.length));
     ids.splice(at, 0, dragId);
@@ -256,7 +284,7 @@ export default function WidgetBody({
       .catch(() => {});
   };
   const rowDragOver = (id: string) => (e: React.DragEvent<HTMLLIElement>) => {
-    if (!orderKey) return;
+    if (!reorderable) return;
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = "move";
@@ -265,11 +293,17 @@ export default function WidgetBody({
     if (!hint || hint.id !== id || hint.side !== side) setHint({ id, side });
   };
   const rowDrop = (id: string) => (e: React.DragEvent<HTMLLIElement>) => {
-    if (!orderKey) return;
+    if (!reorderable) return;
     e.preventDefault();
     e.stopPropagation();
     setHint(null);
     const dragId = e.dataTransfer.getData("text/plain");
+    // A task from outside the focus card dropped onto one of its rows still
+    // focuses it: the whole card is the target, rows included.
+    if (dragId && isFocusCard && !byId.has(dragId)) {
+      focusDrop(e);
+      return;
+    }
     if (!dragId || !byId.has(dragId) || dragId === id) return;
     const r = e.currentTarget.getBoundingClientRect();
     const before = e.clientY < r.top + r.height / 2;
@@ -277,10 +311,14 @@ export default function WidgetBody({
     reorderTo(dragId, before ? targetIdx : targetIdx + 1);
   };
   const listDrop = (e: React.DragEvent) => {
-    if (!orderKey) return;
+    if (!reorderable) return;
     e.preventDefault();
     setHint(null);
     const dragId = e.dataTransfer.getData("text/plain");
+    if (dragId && isFocusCard && !byId.has(dragId)) {
+      focusDrop(e);
+      return;
+    }
     if (!dragId || !byId.has(dragId)) return;
     reorderTo(dragId, orderedIds.length);
   };
@@ -492,12 +530,12 @@ export default function WidgetBody({
       <ul
         className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2"
         onDragOver={
-          isFocusCard || orderKey
+          isFocusCard || reorderable
             ? (e) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }
             : undefined
         }
-        onDrop={isFocusCard ? focusDrop : orderKey ? listDrop : undefined}
-        onDragLeave={orderKey ? () => setHint(null) : undefined}
+        onDrop={reorderable ? listDrop : isFocusCard ? focusDrop : undefined}
+        onDragLeave={reorderable ? () => setHint(null) : undefined}
       >
         {orderedItems.length > 0 ? (
           orderedItems.map((item) => {
@@ -513,8 +551,8 @@ export default function WidgetBody({
                 related={rel}
                 today={today}
                 draggable={isFocusCard || !!orderKey}
-                onDragOver={orderKey ? rowDragOver(item.id) : undefined}
-                onDrop={orderKey ? rowDrop(item.id) : undefined}
+                onDragOver={reorderable ? rowDragOver(item.id) : undefined}
+                onDrop={reorderable ? rowDrop(item.id) : undefined}
                 dropHint={hint?.id === item.id ? hint.side : null}
               />
             );

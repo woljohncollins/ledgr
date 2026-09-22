@@ -747,9 +747,11 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
   quick dates set the task's start and due day together.
 - **Focused today card.** A dashboard card over a "focused today" view lists
   what you starred for today. Drag a task from a day list onto it to focus it;
-  drag a focused task back onto a day to unfocus it and give it that day. A day
-  list can be told to hide focused tasks (view filter excludeFocusedToday) so each
-  task shows in one place. Desktop mouse drag; on a phone use the row menu.
+  drag a focused task back onto a day to unfocus it and give it that day. Drag a
+  row above or below another row in the card to reorder your focus for the day;
+  the card (and the fixed Today page) keep that order. A day list can be told to
+  hide focused tasks (view filter excludeFocusedToday) so each task shows in one
+  place. Desktop mouse drag; on a phone use the row menu.
 - **Dashboard cards can fit their contents.** In a compact view widget's gear, tick
   "Fit height to contents" and the card grows and shrinks with its rows (up to ten
   rows, then it scrolls) instead of holding a fixed height. Cards below it slide
@@ -764,6 +766,9 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
   ascending is drag-to-reorder too, on its own page and in a dashboard card: drag
   a row above or below another and the property is rewritten. The Projects view
   orders this way on project.projorder.
+- **A new task lands on today.** A top-level task created without a day gets
+  today as both its start and due day, so it shows up in the Tasks by day list
+  right away. Give it a date to put it on another day. Subtasks are not dated.
 - **Tasks file themselves under projects.** A new or renamed task whose title
   names a live project — its name, its name without the year, the short name
   before a dash, or anything in the project's comma-separated "Also matches"
