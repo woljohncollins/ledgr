@@ -25,6 +25,7 @@ import SaveStatusIndicator from "@/components/canvas/SaveStatusIndicator";
 import ActiveContextTracker from "@/components/canvas/ActiveContextTracker";
 import FloatingToc from "@/components/canvas/FloatingToc";
 import ItemActionsMenu from "@/components/canvas/ItemActionsMenu";
+import ShareButton from "./ShareButton";
 import ListenBar from "@/components/canvas/ListenBar";
 import PageTrashButton from "@/components/canvas/PageTrashButton";
 import TemplateBanner from "@/components/canvas/TemplateBanner";
@@ -241,6 +242,7 @@ export default async function ItemCanvas({
                   />
                 </span>
               </span>
+              {variant === "page" && !item.isTemplate && <ShareButton itemId={item.id} />}
               {variant === "page" && !item.isTemplate && (
                 <ItemActionsMenu
                   itemId={item.id}
