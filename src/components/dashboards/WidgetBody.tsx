@@ -443,6 +443,7 @@ export default function WidgetBody({
     const boardDraggable = !editMode && !!today && view.layout === "board" && safeToDrag;
     return (
       <div className="flex h-full min-h-0 flex-col">
+        {inlineAdd}
         <div className="min-h-0 flex-1 overflow-auto px-3 pb-3">
           <ViewRenderer
             view={view}
@@ -457,7 +458,6 @@ export default function WidgetBody({
             tz={tz}
           />
         </div>
-        {inlineAdd}
       </div>
     );
   }
@@ -465,6 +465,7 @@ export default function WidgetBody({
   // compact list preview
   return (
     <div className="flex h-full min-h-0 flex-col">
+      {inlineAdd}
       <ul
         className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto p-2"
         onDragOver={
@@ -511,7 +512,6 @@ export default function WidgetBody({
           </li>
         )}
       </ul>
-      {inlineAdd}
     </div>
   );
 }
