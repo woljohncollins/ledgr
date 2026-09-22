@@ -766,6 +766,12 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
   ascending is drag-to-reorder too, on its own page and in a dashboard card: drag
   a row above or below another and the property is rewritten. The Projects view
   orders this way on project.projorder.
+- **New person = Outlook contact lookup.** On a person card with the add button
+  turned on, "+ New person…" opens a search box over the owner's Outlook contacts
+  (the PC bridge exports the Contacts folder into a hidden contact_directory item
+  a few times a day). Picking a contact creates the person with name, email,
+  phone, church (company) and role (job title) filled and opens it; a name with
+  no match can be created blank. GET /api/contacts/search?q= serves the lookup.
 - **Add button that opens the item.** In a view card's gear, tick "Add button
   opens the item" and the card's add line becomes a "+ New task…" button that
   creates the item and opens it in the popup, so it can be titled, dated and

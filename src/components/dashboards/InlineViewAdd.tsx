@@ -17,6 +17,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { showToast } from "@/components/ui/ActionToast";
 import { openItem } from "@/lib/item-nav";
+import PersonLookup from "./PersonLookup";
 import type { ViewFilter } from "@/lib/views";
 
 // Which date column a new item inherits from a today-window filter, or null for
@@ -122,6 +123,12 @@ export default function InlineViewAdd({
     } finally {
       setBusy(false);
     }
+  }
+
+  // A person card's add is a lookup over the Outlook contacts directory
+  // (2026-09-22): pick a contact and the person is created pre-filled.
+  if (mode === "dialog" && type === "person") {
+    return <PersonLookup nextOrder={Date.now()} />;
   }
 
   if (mode === "dialog") {
