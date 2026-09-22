@@ -1,5 +1,8 @@
-// Inline add for a view-backed widget (W2): one quiet input line at the bottom
-// of the widget body. Type a title, press Enter, the item lands in the view and
+// Inline add for a view-backed widget (W2): one quiet input line at the TOP of
+// the widget body, directly above the list it adds to (John, 2026-09-22 — it
+// sat at the bottom until then, which put the capture line out of reach on a
+// card tall enough to scroll).
+// Type a title, press Enter, the item lands in the view and
 // you stay on the board — the whole point of a dashboard as an activity surface
 // (the action widget's quick-capture navigates away; this doesn't).
 //
@@ -123,12 +126,7 @@ export default function InlineViewAdd({
   }
 
   return (
-    <div className="shrink-0 px-2 pb-1.5">
-      {pending.map((t, i) => (
-        <div key={`${t}-${i}`} className="truncate px-1.5 py-1 text-sm text-ink-subtle">
-          {t}
-        </div>
-      ))}
+    <div className="shrink-0 px-2 pt-1.5">
       <input
         value={text}
         onChange={(e) => setText(e.target.value)}
@@ -146,6 +144,14 @@ export default function InlineViewAdd({
         // cancel-drag: react-grid-layout must never start a drag from here.
         className="cancel-drag w-full rounded bg-transparent px-1.5 py-1 text-sm text-ink placeholder:text-ink-faint focus:bg-surface-2 focus:outline-none"
       />
+      {/* Provisional rows sit BELOW the input, against the list they are about
+          to join, so an add reads as landing on the list rather than stacking
+          upward away from it. */}
+      {pending.map((t, i) => (
+        <div key={`${t}-${i}`} className="truncate px-1.5 py-1 text-sm text-ink-subtle">
+          {t}
+        </div>
+      ))}
     </div>
   );
 }
