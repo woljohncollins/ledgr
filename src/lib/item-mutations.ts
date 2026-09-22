@@ -328,6 +328,19 @@ export async function createItem(ownerId: string, rawInput: ItemInput) {
   // The type's canonical format wins over whatever the caller composed (ADR-260):
   // a song's body is ChordPro even when it arrived as a plain markdown string.
   const body = stampCanonicalFormat(input.body ?? null, input.type, capability);
+  // A new top-level task with no day lands on TODAY (John, 2026-09-22: "when I
+  // add a new task it does not show up on today's list"). His model is Outlook —
+  // every task sits on a day — so an undated task would otherwise fall to the
+  // agenda's "No date" bucket at the bottom. Subtasks and templates are left
+  // alone (a batch of subtasks should not all pile onto today).
+  const defaultDay =
+    input.type === "task" &&
+    !isTemplate &&
+    !input.parentId &&
+    input.dueDate == null &&
+    input.scheduledDate == null
+      ? new Date(`${appTodayYmd()}T00:00:00.000Z`)
+      : null;
   const rows = await getDb()
     .insert(items)
     .values({
@@ -338,8 +351,8 @@ export async function createItem(ownerId: string, rawInput: ItemInput) {
       bodyText: extractBodyText(body, input.properties),
       status: statusKey,
       statusCategory: statusCat,
-      dueDate: input.dueDate ?? null,
-      scheduledDate: input.scheduledDate ?? null,
+      dueDate: input.dueDate ?? defaultDay,
+      scheduledDate: input.scheduledDate ?? defaultDay,
       urgency: input.urgency ?? null,
       meetingAt: input.meetingAt ?? null,
       // A note's "date taken" defaults to the creation calendar day (in the app
