@@ -239,6 +239,14 @@ function renderFields(widget: DashboardWidget, onChange: (s: WidgetSettings) => 
           />
           Fit height to contents (compact list only)
         </label>
+        <label className="flex items-center gap-2 text-xs text-neutral-400">
+          <input
+            type="checkbox"
+            checked={s.addMode === "dialog"}
+            onChange={(e) => onChange({ ...s, addMode: e.target.checked ? "dialog" : "inline" })}
+          />
+          Add button opens the item (instead of the inline line)
+        </label>
         <SortField
           value={s.sortOverride}
           onChange={(sortOverride) => onChange({ ...s, sortOverride })}

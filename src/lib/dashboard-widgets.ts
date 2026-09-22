@@ -39,6 +39,11 @@ export type ViewWidgetSettings = {
   // the Focused card "should flex to the number of items in it"). View mode only;
   // edit mode shows the stored height so it can still be arranged.
   fitToContent?: boolean;
+  // How the card adds an item (2026-09-22, John: the inline line "loses sight of
+  // anything I create"). inline = the quiet type-and-Enter line (default);
+  // dialog = a "+ New …" button that creates the item and opens it in the item
+  // popup so it can be filled in right away.
+  addMode?: "inline" | "dialog";
 };
 
 // Stat/count card: a single number from a view's filter (countViewItems).

@@ -16,6 +16,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { showToast } from "@/components/ui/ActionToast";
+import { openItem } from "@/lib/item-nav";
 import type { ViewFilter } from "@/lib/views";
 
 // Which date column a new item inherits from a today-window filter, or null for
@@ -44,8 +45,12 @@ export default function InlineViewAdd({
   filter,
   today,
   focusItemId,
+  mode = "inline",
 }: {
   filter: ViewFilter;
+  // dialog (2026-09-22): a button creates the item and opens it in the item
+  // popup instead of the type-and-Enter line.
+  mode?: "inline" | "dialog";
   // App-timezone today (YYYY-MM-DD) from the server — never recomputed from the
   // browser clock, so a late-night capture lands on the owner's day.
   today?: string;
@@ -78,6 +83,61 @@ export default function InlineViewAdd({
 
   const label = type.replace(/_/g, " ");
   const article = /^[aeiou]/i.test(label) ? "an" : "a";
+  const [busy, setBusy] = useState(false);
+
+  // Same inherit rules as the inline add (type, today-window date, focus stamp,
+  // dashboard focus relation), then straight into the item popup.
+  async function addViaDialog() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const date = inheritedDate(filter);
+      const res = await fetch("/api/items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type,
+          title: "",
+          ...(date && today
+            ? {
+                [date.field]: `${today}T00:00:00.000Z`,
+                ...(date.focus ? { properties: { focus: { date: today, order: Date.now() } } } : null),
+              }
+            : null),
+        }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const { item } = (await res.json()) as { item: { id: string } };
+      const host = filter.relatedTo ? null : focusItemId;
+      if (host) {
+        await fetch(`/api/items/${item.id}/relations`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ targetId: host }),
+        }).catch(() => {});
+      }
+      openItem(router, item.id);
+    } catch {
+      showToast(`Couldn't create ${article} ${label}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (mode === "dialog") {
+    return (
+      <div className="shrink-0 px-2 pt-1.5">
+        <button
+          type="button"
+          onClick={() => void addViaDialog()}
+          disabled={busy}
+          className="cancel-drag w-full rounded border border-dashed border-line px-2 py-1 text-left text-sm text-ink-muted hover:border-line-strong hover:bg-surface-2 hover:text-ink disabled:opacity-60"
+        >
+          {busy ? "Creating…" : `+ New ${label}…`}
+        </button>
+      </div>
+    );
+  }
 
   async function add() {
     const title = text.trim();

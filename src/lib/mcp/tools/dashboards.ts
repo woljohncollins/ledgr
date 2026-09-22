@@ -103,7 +103,8 @@ export const dashboardTools: McpTool[] = [
       "Change one widget on a dashboard by id (widget ids come from " +
       "describe_workspace / create_dashboard / add_widget). `settings` MERGES into " +
       "the widget's current settings (a view widget's titleOverride, itemLimit, " +
-      "sortOverride, renderStyle, hideWhenEmpty, fitToContent — hideWhenEmpty:true drops the " +
+      "sortOverride, renderStyle, hideWhenEmpty, fitToContent, addMode inline|dialog (dialog = a " +
+      "'+ New …' button that creates the item and opens it in the popup) — hideWhenEmpty:true drops the " +
       "card from the grid when its view matches nothing; fitToContent:true sizes a " +
       "compact card to its rows); `layout` REPLACES the " +
       "grid placement ({ lg: {x,y,w,h}, md?, sm? }); `viewId` repoints a view/stat/" +

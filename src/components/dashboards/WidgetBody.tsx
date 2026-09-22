@@ -480,7 +480,12 @@ export default function WidgetBody({
   const addFilter = hasInlineAdd(data, editMode, today) ? data.view?.filter : null;
   const inlineAdd =
     addFilter && today ? (
-      <InlineViewAdd filter={addFilter} today={today} focusItemId={focusItemId} />
+      <InlineViewAdd
+        filter={addFilter}
+        today={today}
+        focusItemId={focusItemId}
+        mode={(widget.settings as ViewWidgetSettings).addMode ?? "inline"}
+      />
     ) : null;
 
   if (settings.renderStyle === "faithful" && data.view) {
