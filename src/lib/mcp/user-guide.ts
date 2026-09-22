@@ -766,6 +766,14 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
   ascending is drag-to-reorder too, on its own page and in a dashboard card: drag
   a row above or below another and the property is rewritten. The Projects view
   orders this way on project.projorder.
+- **Share any item.** The Share button in the item header (page and popup) offers
+  Copy link (a public read-only web page via Ledgr's share tokens), the device
+  share sheet where the browser has one, Copy as text, Email…, and Download .md.
+  The .md is portable Ledgr Markdown: a small front-matter header (ledgr, type,
+  title, tags, properties) over the body. Another Ledgr imports it at Build →
+  Import & Migration (drop files or paste), recreating the item with its type,
+  properties and tags; plain Markdown imports as a note. Endpoints:
+  GET /api/items/{id}/export-md (?download=1 for the file), POST /api/import/ledgr.
 - **New person = Outlook contact lookup.** On a person card with the add button
   turned on, "+ New person…" opens a search box over the owner's Outlook contacts
   (the PC bridge exports the Contacts folder into a hidden contact_directory item

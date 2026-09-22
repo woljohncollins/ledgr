@@ -27,6 +27,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import ConfirmButton from "@/components/ui/ConfirmButton";
 import ItemActionsMenu from "@/components/canvas/ItemActionsMenu";
+import ShareButton from "./ShareButton";
 import ActionGlyph from "@/components/canvas/action-icons";
 import TypeCue from "@/components/canvas/TypeCue";
 import type { ItemOpenMode } from "@/lib/settings";
@@ -457,6 +458,7 @@ export default function Modal({
         <div className="flex items-center gap-1">
           {/* Save as template, Apply template, Customize layout, and the lock
               toggle all live behind the "⋯" menu (a template's are hidden). */}
+          {!isTemplate && <ShareButton itemId={itemId} />}
           {!isTemplate && (
             <ItemActionsMenu
               itemId={itemId}

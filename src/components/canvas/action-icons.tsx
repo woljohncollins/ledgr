@@ -34,6 +34,9 @@ export const ACTION_ICONS = {
   // glyph. Reads as "the underlying text," distinct from `grid` (arrange) and
   // `network` (relations) beside it in the menu.
   markdown: '<path d="M8.5 8.5 5 12l3.5 3.5"/><path d="M15.5 8.5 19 12l-3.5 3.5"/><path d="M13.5 5.5l-3 13"/>',
+  // Share — three nodes joined (the common share glyph).
+  share:
+    '<circle cx="18" cy="5" r="2.5"/><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="19" r="2.5"/><path d="M8.2 10.8l7.6-4.6"/><path d="M8.2 13.2l7.6 4.6"/>',
   // Template pair: a page with a + badge (save) or a ✓ badge (apply).
   templateSave:
     '<rect x="3" y="3" width="11" height="16" rx="2"/><path d="M3 8h11"/><path d="M6 12h5M6 15h3"/><path d="M18.5 14v6M15.5 17h6"/>',
