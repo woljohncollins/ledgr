@@ -766,6 +766,10 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
   ascending is drag-to-reorder too, on its own page and in a dashboard card: drag
   a row above or below another and the property is rewritten. The Projects view
   orders this way on project.projorder.
+- **Add button that opens the item.** In a view card's gear, tick "Add button
+  opens the item" and the card's add line becomes a "+ New task…" button that
+  creates the item and opens it in the popup, so it can be titled, dated and
+  prioritised on the spot (widget setting addMode: "dialog").
 - **A new task lands on today.** A top-level task created without a day gets
   today as both its start and due day, so it shows up in the Tasks by day list
   right away. Give it a date to put it on another day. Subtasks are not dated.
