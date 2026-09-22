@@ -34,10 +34,7 @@ export default function PersonLookup({ nextOrder }: { nextOrder: number }) {
   useEffect(() => {
     if (!open) return;
     const term = q.trim();
-    if (!term) {
-      setHits([]);
-      return;
-    }
+    if (!term) return;
     const ctrl = new AbortController();
     const t = setTimeout(() => {
       fetch(`/api/contacts/search?q=${encodeURIComponent(term)}`, { signal: ctrl.signal })
@@ -106,8 +103,10 @@ export default function PersonLookup({ nextOrder }: { nextOrder: number }) {
     }
   }
 
+  // Stale hits are hidden (not cleared in the effect) once the box is emptied.
+  const shown = q.trim() ? hits : [];
   // Options = the hits plus a trailing "create as typed" row.
-  const rows = hits.length + (q.trim() ? 1 : 0);
+  const rows = shown.length + (q.trim() ? 1 : 0);
 
   return (
     <div ref={boxRef} className="relative shrink-0 px-2 pt-1.5">
@@ -134,7 +133,7 @@ export default function PersonLookup({ nextOrder }: { nextOrder: number }) {
                 setActive((a) => Math.max(a - 1, 0));
               } else if (e.key === "Enter") {
                 e.preventDefault();
-                if (active < hits.length) void create(hits[active]);
+                if (active < shown.length) void create(shown[active]);
                 else if (q.trim()) void create(null);
               }
             }}
@@ -143,7 +142,7 @@ export default function PersonLookup({ nextOrder }: { nextOrder: number }) {
             className="w-full rounded-t bg-transparent px-2 py-1.5 text-sm text-ink placeholder:text-ink-faint focus:outline-none"
           />
           <ul className="max-h-64 overflow-y-auto border-t border-line text-sm">
-            {hits.map((h, i) => (
+            {shown.map((h, i) => (
               <li key={h.id}>
                 <button
                   type="button"
@@ -163,10 +162,10 @@ export default function PersonLookup({ nextOrder }: { nextOrder: number }) {
               <li>
                 <button
                   type="button"
-                  onMouseEnter={() => setActive(hits.length)}
+                  onMouseEnter={() => setActive(shown.length)}
                   onClick={() => void create(null)}
                   disabled={busy}
-                  className={`w-full px-2 py-1.5 text-left text-ink-muted hover:bg-surface-2 ${active === hits.length ? "bg-surface-2" : ""}`}
+                  className={`w-full px-2 py-1.5 text-left text-ink-muted hover:bg-surface-2 ${active === shown.length ? "bg-surface-2" : ""}`}
                 >
                   {busy ? "Creating…" : `Create “${q.trim()}” without a contact`}
                 </button>
