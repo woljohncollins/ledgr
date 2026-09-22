@@ -8,6 +8,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import BoardDnd, { type BoardCard } from "@/components/views/BoardDnd";
 import AgendaDnd, { AGENDA_UNDATED, type AgendaDay, type AgendaRow } from "@/components/views/AgendaDnd";
+import TableDnd, { type TableDndRow } from "@/components/views/TableDnd";
 import ProjectCardGrid, { ProjectCardBody, projectCardFrameClass } from "@/components/projects/ProjectCardGrid";
 import type { ViewProjectCards } from "@/lib/project-cards";
 import PlannerCalendar from "@/components/planner/PlannerCalendar";
@@ -538,6 +539,7 @@ function TableLayout({
   selectable,
   tz,
   tableSort,
+  reorderKey = null,
 }: {
   items: ViewItem[];
   view: ViewDefinition;
@@ -546,6 +548,9 @@ function TableLayout({
   selectable?: boolean;
   tz: string;
   tableSort?: TableSortContext;
+  // Hand-ordered table (2026-09-22): the numeric property the rows are sorted by;
+  // rows then drag to reorder and the drop rewrites that property.
+  reorderKey?: string | null;
 }) {
   // The view's chosen columns, or the default four (Type/Status/Urgency/Date)
   // expressed as field columns so one rendering path serves both. "Date" maps
@@ -571,6 +576,30 @@ function TableLayout({
           { source: "field", key: "urgency" },
           { source: "field", key: defaultDateKey },
         ];
+  const cells = (item: ViewItem) => (
+    <>
+      {selectable && <SelectBodyCell id={item.id} />}
+      <td className="max-w-xs truncate py-1.5 pr-3">
+        <Link
+          href={`/items/${item.id}`}
+          className={`hover:text-neutral-100 ${
+            item.title ? "text-neutral-200" : "text-neutral-500"
+          } ${item.statusCategory === "done" ? "line-through opacity-60" : ""}`}
+        >
+          {item.title || "Untitled"}
+        </Link>
+      </td>
+      {columns.map((col) => (
+        <td
+          key={`${col.source}:${col.key}`}
+          className="max-w-[18rem] truncate py-1.5 pr-3 text-neutral-400"
+          title={columnText(item, col, tz)}
+        >
+          {columnCell(item, col, tz, propertyKinds)}
+        </td>
+      ))}
+    </>
+  );
   return (
     <div className="mt-4 overflow-x-auto">
       <table className="w-full border-collapse text-sm">
@@ -591,35 +620,27 @@ function TableLayout({
             ))}
           </tr>
         </thead>
-        <tbody>
-          {items.map((item) => (
-            <tr
-              key={item.id}
-              className="group border-b border-neutral-900 hover:bg-neutral-800/40"
-            >
-              {selectable && <SelectBodyCell id={item.id} />}
-              <td className="max-w-xs truncate py-1.5 pr-3">
-                <Link
-                  href={`/items/${item.id}`}
-                  className={`hover:text-neutral-100 ${
-                    item.title ? "text-neutral-200" : "text-neutral-500"
-                  } ${item.statusCategory === "done" ? "line-through opacity-60" : ""}`}
-                >
-                  {item.title || "Untitled"}
-                </Link>
-              </td>
-              {columns.map((col) => (
-                <td
-                  key={`${col.source}:${col.key}`}
-                  className="max-w-[18rem] truncate py-1.5 pr-3 text-neutral-400"
-                  title={columnText(item, col, tz)}
-                >
-                  {columnCell(item, col, tz, propertyKinds)}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
+        {reorderKey ? (
+          <TableDnd
+            orderKey={reorderKey}
+            rows={items.map((item): TableDndRow => {
+              const props = item.properties as Record<string, unknown> | null;
+              const n = Number(props?.[reorderKey]);
+              return { id: item.id, order: Number.isFinite(n) ? n : null, cells: cells(item) };
+            })}
+          />
+        ) : (
+          <tbody>
+            {items.map((item) => (
+              <tr
+                key={item.id}
+                className="group border-b border-neutral-900 hover:bg-neutral-800/40"
+              >
+                {cells(item)}
+              </tr>
+            ))}
+          </tbody>
+        )}
       </table>
     </div>
   );
@@ -1261,7 +1282,14 @@ export default function ViewRenderer({
     );
   }
   switch (view.layout) {
-    case "table":
+    case "table": {
+      // Hand-ordered table (2026-09-22): interactive (today set, drag allowed) and
+      // the effective sort is a numeric custom property ascending → rows drag.
+      const effSort = tableSort?.active ?? view.sort;
+      const reorderKey =
+        today && agendaDraggable && effSort && effSort.field === "property" && effSort.numeric === true && effSort.dir === "asc"
+          ? effSort.propertyKey
+          : null;
       return (
         <TableLayout
           items={items}
@@ -1271,8 +1299,10 @@ export default function ViewRenderer({
           selectable={selectable}
           tz={tz}
           tableSort={tableSort}
+          reorderKey={reorderKey}
         />
       );
+    }
     case "board":
       return (
         <BoardLayout

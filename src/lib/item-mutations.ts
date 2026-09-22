@@ -45,6 +45,7 @@ import { parseRecurrence } from "@/lib/recurrence";
 import { shiftChildDates, type ShiftedChild } from "@/lib/relative-subtask-service";
 import { dayDelta, isDuePinned, shiftDay } from "@/lib/date-anchor";
 import { mirrorTaskDates } from "@/lib/one-date";
+import { autoLinkTaskToProject } from "@/lib/project-autolink";
 import {
   appTodayYmd,
   completeMaterializedOccurrence,
@@ -380,6 +381,9 @@ export async function createItem(ownerId: string, rawInput: ItemInput) {
   // above, so a failed edge never undoes a capture.
   if (destinationId) {
     await relateItems(ownerId, created.id, destinationId, "project").catch(() => {});
+  } else if (created.type === "task" && !isTemplate) {
+    // A task that names a project in its title files under it (2026-09-22).
+    await autoLinkTaskToProject(ownerId, created.id, created.title).catch(() => {});
   }
   kickYoutubeTranscript(ownerId, created.type, created.url);
   return created;
@@ -810,6 +814,11 @@ export async function updateItem(
   // Additive (ADR-183 carve-out): callers that ignore the key are unaffected; the
   // item PATCH route passes it through so the client can raise "Moved N subtasks ·
   // Undo" instead of moving the owner's dates silently.
+  // Renamed task that now names a project → file it there (2026-09-22). No-op
+  // when it already has a project edge.
+  if (patch.title !== undefined && updated.type === "task" && !updated.isTemplate) {
+    await autoLinkTaskToProject(ownerId, updated.id, updated.title).catch(() => {});
+  }
   return shiftedChildren.length > 0
     ? { ...updated, datesShifted: shiftedChildren }
     : updated;

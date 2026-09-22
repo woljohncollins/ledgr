@@ -760,6 +760,16 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
   property is rewritten (midpoint of its new neighbours) so the order sticks. The
   "Who needs a call" card orders people this way on person.callorder. To make any
   list hand-orderable, add a number property to the type and sort the view by it.
+- **Hand-ordered tables.** A table view sorted by a NUMERIC custom property
+  ascending is drag-to-reorder too, on its own page and in a dashboard card: drag
+  a row above or below another and the property is rewritten. The Projects view
+  orders this way on project.projorder.
+- **Tasks file themselves under projects.** A new or renamed task whose title
+  names a live project — its name, its name without the year, the short name
+  before a dash, or anything in the project's comma-separated "Also matches"
+  (aliases) property — is linked to that project automatically, unless it already
+  has one. Short all-caps aliases (LDC, TI, YES) must appear in caps. The MCP tool
+  autolink_project_tasks backfills existing tasks.
 - **Dashboard cards can hide when empty.** In a view widget's gear, tick "Hide this
   card when it has nothing to show" and the card drops out of the grid until its
   view has items again. Edit mode always shows every card.

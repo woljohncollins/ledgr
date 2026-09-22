@@ -2,10 +2,31 @@
 // relations.ts, same owner-scoped edge logic the REST API uses.
 import { asUuid } from "@/lib/api";
 import { relateItems, unrelateItems } from "@/lib/relations";
+import { autoLinkAllTasks } from "@/lib/project-autolink";
 import { optString } from "./args";
 import type { McpTool } from "./wire";
 
 export const relationTools: McpTool[] = [
+  {
+    name: "autolink_project_tasks",
+    title: "File tasks under projects by title",
+    description:
+      "Walk every open task that has no project and link it to the live project " +
+      "whose name, name-without-year, short name before a dash, or comma-separated " +
+      "`aliases` property appears in the task title (word-boundary; a short ALL-CAPS " +
+      "alias like LDC/TI/YES must appear in caps). New and renamed tasks get this " +
+      "automatically; call this to backfill after adding a project or an alias. " +
+      "Returns what it linked.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        includeDone: { type: "boolean", description: "Also scan completed tasks (default false)." },
+      },
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    handler: async (ownerId, args) => autoLinkAllTasks(ownerId, { includeDone: args.includeDone === true }),
+  },
   {
     name: "relate_items",
     title: "Relate items",
