@@ -13,7 +13,7 @@ import {
   WIDGET_KINDS,
 } from "@/lib/dashboards";
 import { ItemError } from "@/lib/items";
-import { updateSettings, type UserSettings } from "@/lib/settings";
+import { ITEM_OPEN_MODES, updateSettings, type ItemOpenMode, type UserSettings } from "@/lib/settings";
 import { dashView } from "./serializers";
 import type { McpTool } from "./wire";
 
@@ -164,6 +164,33 @@ export const dashboardTools: McpTool[] = [
       const widgetId = asUuid(args.widgetId, "widgetId");
       const updated = await removeWidget(ownerId, dashboardId, widgetId);
       return dashView(updated);
+    },
+  },
+  {
+    name: "set_item_open_mode",
+    title: "Set where a clicked item opens",
+    description:
+      "Set the owner's item open mode — the same choice as Settings → 'Where items " +
+      "open'. auto = the measured default (a right-docked side panel when the window " +
+      "is wide, else a popup); left / right = a docked side panel on that edge; " +
+      "center = a popup centered on the screen, pinned to the top. Direct loads and " +
+      "'Expand' always use the full page regardless.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        mode: { type: "string", enum: [...ITEM_OPEN_MODES], description: "auto | left | right | center." },
+      },
+      required: ["mode"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    handler: async (ownerId, args) => {
+      const mode = args.mode;
+      if (!(ITEM_OPEN_MODES as readonly string[]).includes(mode as string)) {
+        throw new ItemError("bad_request", "mode must be one of auto | left | right | center");
+      }
+      const settings = await updateSettings(ownerId, { itemOpenMode: mode as ItemOpenMode });
+      return { itemOpenMode: settings.itemOpenMode };
     },
   },
   {
