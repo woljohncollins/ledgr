@@ -171,7 +171,12 @@ export default function Modal({
   // thing left to close, so just unmount it and leave the main pane alone.
   const close = useCallback(() => {
     if (stale) setDismissed(true);
-    else router.back();
+    else {
+      router.back();
+      // The launching page may hold a client-cached RSC payload from before any
+      // edits made in here (2026-09-23): refetch it once the back() has landed.
+      setTimeout(() => router.refresh(), 150);
+    }
   }, [router, stale]);
   // No reset needed: opening another item swaps loading.tsx into the slot, which
   // remounts this component with a fresh `dismissed`.

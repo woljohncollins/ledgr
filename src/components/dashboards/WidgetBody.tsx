@@ -74,6 +74,7 @@ function ItemRow({
   onDragOver,
   onDrop,
   dropHint = null,
+  vanishOnDone = false,
 }: {
   item: ViewItem;
   assoc?: Assoc;
@@ -85,6 +86,11 @@ function ItemRow({
   onDragOver?: (e: React.DragEvent<HTMLLIElement>) => void;
   onDrop?: (e: React.DragEvent<HTMLLIElement>) => void;
   dropHint?: "above" | "below" | null;
+  // The card's view drops done rows (status open / active / focused today), so
+  // a completed row fades out at once instead of waiting for the server refresh
+  // (John, 2026-09-23: "when I check off a focused today task it does not
+  // remove it from the list").
+  vanishOnDone?: boolean;
 }) {
   const done = item.statusCategory === "done";
   const isTask = item.type === "task";
@@ -124,7 +130,7 @@ function ItemRow({
     >
       {isTask && (
         <span className="cancel-drag shrink-0">
-          <SubtaskCheckbox id={item.id} done={done} />
+          <SubtaskCheckbox id={item.id} done={done} vanishRow={vanishOnDone} />
         </span>
       )}
       {isPerson && today && (
@@ -196,6 +202,9 @@ export default function WidgetBody({
   // focused today list as well"): the marker's `order` is rewritten with the
   // same midpoint scheme the manual-order cards use, and the card sorts by it.
   const isFocusCard = widget.kind === "view" && !!data.view?.filter.focusedToday && !!today;
+  // Does this card's view exclude done items? Then a completed row can leave now.
+  const f = data.view?.filter;
+  const dropsDone = !!f && (f.status === "open" || f.statusCategory === "active" || !!f.focusedToday);
   const focusDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const id = e.dataTransfer.getData("text/plain");
@@ -556,6 +565,7 @@ export default function WidgetBody({
                 related={rel}
                 today={today}
                 draggable={isFocusCard || !!orderKey}
+                vanishOnDone={dropsDone}
                 onDragOver={reorderable ? rowDragOver(item.id) : undefined}
                 onDrop={reorderable ? rowDrop(item.id) : undefined}
                 dropHint={hint?.id === item.id ? hint.side : null}
