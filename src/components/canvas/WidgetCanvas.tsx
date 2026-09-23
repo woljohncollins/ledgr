@@ -491,12 +491,22 @@ export default async function WidgetCanvas({ item, ownerId, variant }: CanvasPro
           only when written; empty, it collapses to a small lines-glyph button
           that expands the editor (HeaderOverview). */}
       {showOverview && (
-        <div className="mb-4 min-w-0">
+        // The overview reads a couple of points smaller than the note canvas
+        // (John, 2026-09-23: "the text under the project ... is very large").
+        // Two nested vars because a custom property cannot reference itself on
+        // the same element; the outer captures the owner's prose size, the inner
+        // steps it down 2px for everything inside.
+        <div
+          className="mb-4 min-w-0"
+          style={{ "--overview-base": "var(--prose-font-size, 1rem)" } as React.CSSProperties}
+        >
+          <div style={{ "--prose-font-size": "calc(var(--overview-base) - 2px)" } as React.CSSProperties}>
           <HeaderOverview
             itemId={item.id}
             body={item.body}
             hasContent={hasOverviewText}
           />
+          </div>
         </div>
       )}
 
