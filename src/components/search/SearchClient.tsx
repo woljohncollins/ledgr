@@ -24,6 +24,8 @@ type ResultRow = {
   id: string;
   type: string;
   title: string;
+  // Done items read struck through in results (John, 2026-09-29).
+  statusCategory?: string;
   updatedAt: string;
   snippet: string | null;
   // Fuzzy mode only: per-criterion contributions, in the order the criteria were
@@ -805,7 +807,7 @@ export default function SearchClient({
                     onClick={() => apiQ && pushSearchHistory(apiQ)}
                     className={`min-w-0 flex-1 truncate text-sm ${
                       row.title ? "text-neutral-200" : "text-neutral-500"
-                    }`}
+                    } ${row.statusCategory === "done" ? "line-through opacity-60" : ""}`}
                   >
                     {row.title || "Untitled"}
                   </Link>
