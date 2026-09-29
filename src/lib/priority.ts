@@ -7,8 +7,12 @@
 // P6 none (plain/neutral). Stored as a smallint 1..6 (null = unset, treated as
 // P6 for display/sort-last).
 
-export const PRIORITIES = [1, 2, 3, 4, 5, 6] as const;
-export type Priority = (typeof PRIORITIES)[number];
+// Everything the column can hold (1..6) - stored data and the style table.
+export const ALL_PRIORITIES = [1, 2, 3, 4, 5, 6] as const;
+export type Priority = (typeof ALL_PRIORITIES)[number];
+// What the pickers OFFER (John, 2026-09-29: "only P1, P2, P3, no others" - they
+// map to Outlook High / Normal / Low). Older P4-P6 values still render.
+export const PRIORITIES = [1, 2, 3] as const;
 
 export function isPriority(n: unknown): n is Priority {
   return typeof n === "number" && Number.isInteger(n) && n >= 1 && n <= 6;
