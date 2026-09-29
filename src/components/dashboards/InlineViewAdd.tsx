@@ -129,7 +129,7 @@ export default function InlineViewAdd({
   // A person card's add is a lookup over the Outlook contacts directory
   // (2026-09-22): pick a contact and the person is created pre-filled.
   if (mode === "dialog" && type === "person") {
-    return <PersonLookup nextOrder={Date.now()} />;
+    return <PersonLookup />;
   }
 
   if (mode === "dialog") {
