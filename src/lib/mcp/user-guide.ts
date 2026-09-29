@@ -774,6 +774,11 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
   Import & Migration (drop files or paste), recreating the item with its type,
   properties and tags; plain Markdown imports as a note. Endpoints:
   GET /api/items/{id}/export-md (?download=1 for the file), POST /api/import/ledgr.
+- **Call list = people with a Call order.** "Who needs a call" shows persons whose
+  callorder property is set, in that order. The tick on a row stamps lastcontact =
+  today and clears callorder, so the person leaves the list for good; tapping
+  again the same day puts them back. To add someone: "+ New person" (sets a
+  callorder) or set Call order on their record.
 - **New person = Outlook contact lookup.** On a person card with the add button
   turned on, "+ New person…" opens a search box over the owner's Outlook contacts
   (the PC bridge exports the Contacts folder into a hidden contact_directory item

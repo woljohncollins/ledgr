@@ -1,6 +1,11 @@
 // "I called them" tick for a person row (John, 2026-09-22). One tap stamps the
-// person's `lastcontact` date property with today; tapping again the same day
-// clears it, so a mis-tap is undoable without opening the record.
+// person's `lastcontact` date property with today AND takes them off the call
+// list for good by clearing `callorder` (John, 2026-09-29: "does not remove
+// someone permanently once I click them off"). The "Who needs a call" view
+// filters on callorder being set, so the row leaves and stays gone until the
+// person is added again ("+ New person" or setting a Call order). Tapping again
+// the same day undoes both, so a mis-tap is recoverable without opening the
+// record.
 //
 // It deliberately does NOT complete the person. `person` has statusMode "none"
 // and should keep it: a person is never done, they are contacted and then due
@@ -12,7 +17,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { beginSave, endSave } from "@/lib/save-status";
 
 // A `date` property is stored as the bare YYYY-MM-DD string the date input
@@ -34,6 +39,7 @@ export default function ContactedCheck({
   today: string; // YYYY-MM-DD, app timezone — never the browser clock
 }) {
   const router = useRouter();
+  const btnRef = useRef<HTMLButtonElement>(null);
   const [on, setOn] = useState(lastContact === today);
   const [prev, setPrev] = useState(lastContact);
   // Adjust-during-render: a refresh brings the server value, which wins.
@@ -53,10 +59,24 @@ export default function ContactedCheck({
         // propertyPatch merges per key, so church/role/cadence are untouched.
         // Clearing writes null rather than "" — an empty string would sort as a
         // real value and park the person at the wrong end of the list.
-        body: JSON.stringify({ propertyPatch: { lastcontact: next ? today : null } }),
+        body: JSON.stringify({
+          propertyPatch: next
+            ? { lastcontact: today, callorder: null }
+            : { lastcontact: null, callorder: Date.now() },
+        }),
       });
       if (!res.ok) throw new Error(String(res.status));
       endSave(true);
+      // Off the list now: fade the row out ahead of the server refresh (the
+      // SubtaskCheckbox vanishRow idiom; the refresh unmounts the li anyway).
+      const li = next ? btnRef.current?.closest("li") : null;
+      if (li) {
+        li.style.transition = "opacity 300ms";
+        li.style.opacity = "0.35";
+        setTimeout(() => {
+          li.style.display = "none";
+        }, 350);
+      }
       router.refresh();
     } catch {
       setOn(!next);
@@ -66,11 +86,12 @@ export default function ContactedCheck({
 
   return (
     <button
+      ref={btnRef}
       type="button"
       onClick={toggle}
-      aria-label={on ? "Undo contacted today" : "Mark contacted today"}
+      aria-label={on ? "Undo — put back on the call list" : "Called — take off the list"}
       aria-pressed={on}
-      title={on ? "Contacted today — tap to undo" : "Mark contacted today"}
+      title={on ? "Contacted today — tap to put them back on the list" : "Mark contacted and take off the call list"}
       className={`cancel-drag grid h-[18px] w-[18px] shrink-0 place-items-center rounded-full border-2 leading-none transition-colors ${
         on
           ? "border-[var(--accent)] bg-[var(--accent)] text-white"
