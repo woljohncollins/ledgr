@@ -14,7 +14,7 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Layouts } from "react-grid-layout";
 import AddWidgetMenu from "./AddWidgetMenu";
@@ -154,24 +154,25 @@ export default function DashboardClient({
   //     `initialWidgets` during render, which would stomp an in-progress
   //     arrangement or race a debounced layout/settings PATCH.
   const lastRefresh = useRef(0);
-  // The item popup marks <body data-item-panel="open"> while it owns the URL.
-  // When that flag disappears the popup has closed: refetch this dashboard so a
-  // task created or completed inside the popup shows up immediately (John,
-  // 2026-09-29: "when I add a new task on home it does not immediately show up").
+  // The item popup owns the URL (/items/<id>) while it is open; this dashboard
+  // stays mounted underneath. When the URL comes BACK from an item to this page,
+  // the popup has closed and the router will otherwise show the cached payload
+  // from before anything was created or completed inside it. Refetch then — in
+  // an effect after the navigation has committed, because a refresh fired
+  // during the back() transition is dropped (the earlier body-flag observer and
+  // the 150ms timer both lost that race). John, 2026-09-29: "new tasks ... take
+  // 3-5 min to show up".
+  const pathname = usePathname();
+  const prevPath = useRef(pathname);
   useEffect(() => {
-    if (typeof document === "undefined") return;
-    let wasOpen = document.body.dataset.itemPanel === "open";
-    const obs = new MutationObserver(() => {
-      const open = document.body.dataset.itemPanel === "open";
-      if (wasOpen && !open && !editMode) {
-        lastRefresh.current = Date.now();
-        router.refresh();
-      }
-      wasOpen = open;
-    });
-    obs.observe(document.body, { attributes: true, attributeFilter: ["data-item-panel"] });
-    return () => obs.disconnect();
-  }, [editMode, router]);
+    const prev = prevPath.current;
+    prevPath.current = pathname;
+    if (prev === pathname) return;
+    if (prev.startsWith("/items/") && !pathname.startsWith("/items/") && !editMode) {
+      lastRefresh.current = Date.now();
+      router.refresh();
+    }
+  }, [pathname, editMode, router]);
   useEffect(() => {
     // Mount counts as a refresh, so a focus right after load doesn't refetch.
     if (!lastRefresh.current) lastRefresh.current = Date.now();
