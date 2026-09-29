@@ -353,7 +353,11 @@ export async function createItem(ownerId: string, rawInput: ItemInput) {
       statusCategory: statusCat,
       dueDate: input.dueDate ?? defaultDay,
       scheduledDate: input.scheduledDate ?? defaultDay,
-      urgency: input.urgency ?? null,
+      // A new top-level task is P1 unless told otherwise (John, 2026-09-29:
+      // "I also want it to be a P1 priority as well"). Same scope as defaultDay.
+      urgency:
+        input.urgency ??
+        (input.type === "task" && !isTemplate && !input.parentId ? 1 : null),
       meetingAt: input.meetingAt ?? null,
       // A note's "date taken" defaults to the creation calendar day (in the app
       // timezone), stored UTC-midnight like scheduled/due (ADR-008/ADR-110).
