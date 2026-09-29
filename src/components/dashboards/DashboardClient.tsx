@@ -154,6 +154,24 @@ export default function DashboardClient({
   //     `initialWidgets` during render, which would stomp an in-progress
   //     arrangement or race a debounced layout/settings PATCH.
   const lastRefresh = useRef(0);
+  // The item popup marks <body data-item-panel="open"> while it owns the URL.
+  // When that flag disappears the popup has closed: refetch this dashboard so a
+  // task created or completed inside the popup shows up immediately (John,
+  // 2026-09-29: "when I add a new task on home it does not immediately show up").
+  useEffect(() => {
+    if (typeof document === "undefined") return;
+    let wasOpen = document.body.dataset.itemPanel === "open";
+    const obs = new MutationObserver(() => {
+      const open = document.body.dataset.itemPanel === "open";
+      if (wasOpen && !open && !editMode) {
+        lastRefresh.current = Date.now();
+        router.refresh();
+      }
+      wasOpen = open;
+    });
+    obs.observe(document.body, { attributes: true, attributeFilter: ["data-item-panel"] });
+    return () => obs.disconnect();
+  }, [editMode, router]);
   useEffect(() => {
     // Mount counts as a refresh, so a focus right after load doesn't refetch.
     if (!lastRefresh.current) lastRefresh.current = Date.now();

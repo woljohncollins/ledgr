@@ -117,6 +117,7 @@ export default function InlineViewAdd({
           body: JSON.stringify({ targetId: host }),
         }).catch(() => {});
       }
+      router.refresh();
       openItem(router, item.id);
     } catch {
       showToast(`Couldn't create ${article} ${label}`);

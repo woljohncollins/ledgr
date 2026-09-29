@@ -789,9 +789,10 @@ Timeline chip opens the review timeline, and a key-link chip opens the link.
   opens the item" and the card's add line becomes a "+ New task…" button that
   creates the item and opens it in the popup, so it can be titled, dated and
   prioritised on the spot (widget setting addMode: "dialog").
-- **A new task lands on today.** A top-level task created without a day gets
-  today as both its start and due day, so it shows up in the Tasks by day list
-  right away. Give it a date to put it on another day. Subtasks are not dated.
+- **A new task lands on today, at P1.** A top-level task created without a day
+  gets today as both its start and due day, and P1 unless a priority is given,
+  so it shows up at the top of today in the Tasks by day list right away. Give it
+  a date or priority to change that. Subtasks get neither default.
 - **Tasks file themselves under projects.** A new or renamed task whose title
   names a live project — its name, its name without the year, the short name
   before a dash, or anything in the project's comma-separated "Also matches"
