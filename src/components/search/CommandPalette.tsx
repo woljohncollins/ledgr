@@ -25,7 +25,7 @@ import {
 import { parseTypeToken } from "@/components/search/type-token";
 import { pushSearchHistory, readSearchHistory } from "@/lib/search-history";
 
-type ItemHit = { id: string; title: string; type: string };
+type ItemHit = { id: string; title: string; type: string; statusCategory?: string };
 type IndexData = {
   types: { key: string; label: string; icon: string | null }[];
   views: { id: string; name: string }[];
@@ -136,6 +136,7 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
         sublabel: h.type,
         href: `/items/${h.id}`,
         icon: "document",
+        done: h.statusCategory === "done",
       })),
     [items, q]
   );
@@ -282,7 +283,7 @@ export default function CommandPalette({ onClose }: { onClose: () => void }) {
                           }`}
                         >
                           <NavGlyph icon={r.icon} size={16} className="shrink-0 text-neutral-500" />
-                          <span className="min-w-0 flex-1 truncate">{r.label}</span>
+                          <span className={`min-w-0 flex-1 truncate ${r.kind === "destination" && r.done ? "line-through opacity-60" : ""}`}>{r.label}</span>
                           {r.sublabel && (
                             <span className="shrink-0 text-xs text-neutral-500">{r.sublabel}</span>
                           )}

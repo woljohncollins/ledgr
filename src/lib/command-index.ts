@@ -36,6 +36,8 @@ export type CommandResult =
       sublabel?: string;
       href: string;
       icon: string;
+      // A completed item (search hit): the palette strikes the label through.
+      done?: boolean;
       // Extra words that should find this entry, for the case where the thing
       // someone types is not what the entry is called (ADR-189: "help" and
       // "docs" must reach the User Guide). Matched exactly like the label, and
