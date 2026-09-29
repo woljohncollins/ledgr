@@ -276,7 +276,11 @@ function viewWhere(ownerId: string, filter: ViewFilter): SQL[] {
   if (filter.excludeFocusedToday) {
     const t = todayBounds().today;
     const ymd = `${t.y}-${String(t.m).padStart(2, "0")}-${String(t.d).padStart(2, "0")}`;
-    where.push(sql`not (${items.properties} @> ${JSON.stringify({ focus: { date: ymd } })}::jsonb)`);
+    // coalesce: a brand-new item has properties NULL, and `not (NULL @> x)` is
+    // NULL, which EXCLUDED every fresh task from the Home list until the bridge
+    // wrote its first property a few minutes later (John, 2026-09-29: "new
+    // tasks take 3-5 min to show up").
+    where.push(sql`not (coalesce(${items.properties}, '{}'::jsonb) @> ${JSON.stringify({ focus: { date: ymd } })}::jsonb)`);
   }
 
   // The AND/OR rules layer (ADR-164). buildWhereSql folds the group's conditions
@@ -353,7 +357,7 @@ function propertyConditionSql(key: string, raw: WhereCondition): SQL | null {
     case "checked":
       return sql`${items.properties} @> ${JSON.stringify({ [key]: true })}::jsonb`;
     case "unchecked":
-      return sql`not (${items.properties} @> ${JSON.stringify({ [key]: true })}::jsonb)`;
+      return sql`not (coalesce(${items.properties}, '{}'::jsonb) @> ${JSON.stringify({ [key]: true })}::jsonb)`;
     case "contains":
       return c.value != null ? sql`${text} ilike ${`%${c.value}%`}` : null;
     case "eq":
