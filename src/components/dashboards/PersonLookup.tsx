@@ -19,7 +19,7 @@ type Hit = {
   city: string | null;
 };
 
-export default function PersonLookup({ nextOrder }: { nextOrder: number }) {
+export default function PersonLookup() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
@@ -78,7 +78,8 @@ export default function PersonLookup({ nextOrder }: { nextOrder: number }) {
     if (busy) return;
     setBusy(true);
     try {
-      const properties: Record<string, unknown> = { callorder: nextOrder };
+      // Bottom of the call list: the order key is the moment of creation.
+      const properties: Record<string, unknown> = { callorder: Date.now() };
       if (hit) {
         if (hit.email) properties.email = hit.email;
         if (hit.phone) properties.phone = hit.phone;
