@@ -150,6 +150,7 @@ export default async function Nav() {
       slots={slots}
       mobileSlots={mobileSlots}
       mobileNavConfig={mobileNavConfig}
+      navConfig={settings.navSlots}
       unreadCount={unreadCount}
       typeOptions={typeRows}
       buildTypes={buildTypes.map((t) => ({ key: t.key, label: t.label, icon: t.icon }))}
