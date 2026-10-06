@@ -628,6 +628,31 @@ export async function updateItem(
   const set: Record<string, unknown> = {};
   if (patch.type !== undefined) set.type = patch.type;
   if (patch.title !== undefined) set.title = patch.title;
+  // Ministry Visit title carries the visit date (John, 2026-10-06: "when the
+  // date is chosen it is added to the end of the name"). Picking a Visit date
+  // rewrites the title as "<name> — Oct 07, 2026"; clearing it drops the suffix.
+  // The name part is whatever precedes an existing " — <date>" suffix.
+  if ((patch.type ?? existing[0].type) === "ministry_visit") {
+    const vd =
+      patch.propertyPatch && "visit_date" in patch.propertyPatch
+        ? patch.propertyPatch.visit_date
+        : patch.properties && typeof patch.properties === "object" && "visit_date" in (patch.properties as object)
+          ? (patch.properties as Record<string, unknown>).visit_date
+          : undefined;
+    if (vd !== undefined) {
+      const current = patch.title ?? (await getItem(ownerId, id)).title ?? "";
+      const base = current.replace(/\s+—\s+(?:[A-Z][a-z]{2} \d{2}, \d{4}|\d{4}-\d{2}-\d{2})\s*$/u, "").trim();
+      const m = typeof vd === "string" ? /^(\d{4})-(\d{2})-(\d{2})/.exec(vd) : null;
+      if (m) {
+        const label = new Intl.DateTimeFormat("en-US", { month: "short", day: "2-digit", year: "numeric", timeZone: "UTC" }).format(
+          new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])))
+        );
+        set.title = `${base} — ${label}`;
+      } else if (vd === null || vd === "") {
+        set.title = base;
+      }
+    }
+  }
   if (patch.status !== undefined) {
     set.status = nextStatus;
     set.statusCategory = nextCategory;
