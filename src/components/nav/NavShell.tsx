@@ -483,21 +483,38 @@ export default function NavShell({
     slot,
     id: i === 0 ? "home" : `d${i}`,
   }));
-  // Desktop rail drag-to-reorder (John, 2026-10-06: "let me drag and drop menu
-  // items on the left bar"). Plain HTML5 drag on the slot wrappers; Home stays
-  // put. On drop the same permutation is written to settings.navSlots (slots
-  // not on the rail keep their places) and the server re-resolves.
-  const [railDrag, setRailDrag] = useState<{ from: number; over: number | null } | null>(null);
-  const commitRailOrder = async (from: number, to: number) => {
-    if (!navConfig || from === to || from < 1 || to < 1) return;
-    const order = [...slots];
-    const [moved] = order.splice(from - 1, 1);
+  // Desktop rail reorder (John, 2026-10-06: "let me drag and drop menu items
+  // on the left bar"). Same machinery as the phone bar: ReorderableStrip tracks
+  // the pointer (press-and-drag with a mouse, hold-and-drag on touch), the
+  // order is local state so the rail follows the pointer, and on release the
+  // same permutation is written to settings.navSlots. Home stays pinned.
+  type RailOrder = { base: ShellSlot[]; order: ShellSlot[] };
+  const [railOverride, setRailOverride] = useState<RailOrder | null>(null);
+  const railOrder = railOverride && railOverride.base === slots ? railOverride.order : slots;
+  const railOrderRef = useRef<RailOrder | null>(null);
+  const railSlots = [HOME_SLOT, ...railOrder].map((slot, i) => ({
+    slot,
+    id: i === 0 ? "home" : `r${i}`,
+  }));
+  const moveRailSlot = (from: number, to: number) => {
+    if (from < 1 || to < 1) return;
+    const next = [...railOrder];
+    const [moved] = next.splice(from - 1, 1);
     if (!moved) return;
-    order.splice(to - 1, 0, moved);
-    const idx = order.map((sl) => sl.configIndex);
+    next.splice(to - 1, 0, moved);
+    const value = { base: slots, order: next };
+    railOrderRef.current = value;
+    setOpenTools(null);
+    setRailOverride(value);
+  };
+  const commitRailOrder = async () => {
+    const latest = railOrderRef.current;
+    if (!latest || latest.base !== slots || !navConfig) return;
+    const idx = latest.order.map((sl) => sl.configIndex);
     if (idx.some((i) => i === undefined || !navConfig[i])) return;
     const ids = idx as number[];
     const positions = [...ids].sort((a, b) => a - b);
+    if (positions.every((p, k) => p === ids[k])) return;
     const next = navConfig.slice();
     positions.forEach((pos, k) => {
       next[pos] = navConfig[ids[k]];
@@ -509,43 +526,6 @@ export default function NavShell({
     }).catch(() => {});
     router.refresh();
   };
-  // Wraps a rail slot so it can be dragged above/below its neighbours. Index 0
-  // (Home) is a drop target only in the sense that dropping on it goes to 1.
-  const railDraggable = (node: ReactNode, i: number, id: string) => (
-    <div
-      key={`drag-${id}`}
-      draggable={i > 0}
-      onDragStart={(e) => {
-        if (i === 0) return;
-        e.dataTransfer.effectAllowed = "move";
-        e.dataTransfer.setData("text/plain", String(i));
-        setRailDrag({ from: i, over: null });
-      }}
-      onDragOver={(e) => {
-        if (!railDrag) return;
-        e.preventDefault();
-        e.dataTransfer.dropEffect = "move";
-        if (railDrag.over !== i) setRailDrag({ ...railDrag, over: i });
-      }}
-      onDrop={(e) => {
-        e.preventDefault();
-        const from = railDrag?.from ?? Number(e.dataTransfer.getData("text/plain"));
-        setRailDrag(null);
-        if (!Number.isFinite(from)) return;
-        void commitRailOrder(from, Math.max(1, i));
-      }}
-      onDragEnd={() => setRailDrag(null)}
-      className={`${i > 0 ? "cursor-grab active:cursor-grabbing" : ""} ${
-        railDrag && railDrag.over === i && railDrag.from !== i
-          ? railDrag.from > i
-            ? "shadow-[inset_0_2px_0_0_var(--accent)]"
-            : "shadow-[inset_0_-2px_0_0_var(--accent)]"
-          : ""
-      } rounded-lg`}
-    >
-      {node}
-    </div>
-  );
   // The phone bar reorders by hold-and-drag (ReorderableStrip): the order is
   // local state so the bar follows the finger, then the same permutation is
   // written to the stored phone list and the server re-resolves. Ids stay
@@ -1265,21 +1245,24 @@ export default function NavShell({
           )}
 
           {/* Slots. The rail's tools popovers open to the docked side. */}
-          <div className="flex flex-col gap-1">
-            {desktopSlots.map(({ slot, id }, i) =>
-              railDraggable(
-                renderSlot(
-                  slot,
-                  id,
-                  railSize === "fat" ? railFatSlot : railThinSlot,
-                  railSize === "fat",
-                  "side"
-                ),
-                i,
-                id
-              )
-            )}
-          </div>
+          <ReorderableStrip
+            className="flex flex-col gap-1"
+            axis="y"
+            mouseDrag
+            items={railSlots.map(({ slot, id }) => ({
+              id,
+              locked: id === "home",
+              node: renderSlot(
+                slot,
+                id,
+                railSize === "fat" ? railFatSlot : railThinSlot,
+                railSize === "fat",
+                "side"
+              ),
+            }))}
+            onMove={moveRailSlot}
+            onCommit={() => void commitRailOrder()}
+          />
 
           {density === "spread" && <div className="flex-1" />}
 
