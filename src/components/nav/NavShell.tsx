@@ -143,6 +143,7 @@ export default function NavShell({
   slots,
   mobileSlots,
   mobileNavConfig = [],
+  navConfig,
   unreadCount,
   typeOptions,
   buildTypes,
@@ -159,6 +160,8 @@ export default function NavShell({
   // The stored slot list mobileSlots was resolved from (mobileNavSlots, or
   // navSlots when the phone mirrors desktop): what a bar reorder writes back.
   mobileNavConfig?: NavSlotConfig[];
+  // The stored desktop slot list (settings.navSlots): what a rail drag writes back.
+  navConfig?: NavSlotConfig[];
   // Unread notification count: seeds the PWA app-icon badge + the More-menu link.
   unreadCount: number;
   typeOptions: { key: string; label: string }[];
@@ -480,6 +483,69 @@ export default function NavShell({
     slot,
     id: i === 0 ? "home" : `d${i}`,
   }));
+  // Desktop rail drag-to-reorder (John, 2026-10-06: "let me drag and drop menu
+  // items on the left bar"). Plain HTML5 drag on the slot wrappers; Home stays
+  // put. On drop the same permutation is written to settings.navSlots (slots
+  // not on the rail keep their places) and the server re-resolves.
+  const [railDrag, setRailDrag] = useState<{ from: number; over: number | null } | null>(null);
+  const commitRailOrder = async (from: number, to: number) => {
+    if (!navConfig || from === to || from < 1 || to < 1) return;
+    const order = [...slots];
+    const [moved] = order.splice(from - 1, 1);
+    if (!moved) return;
+    order.splice(to - 1, 0, moved);
+    const idx = order.map((sl) => sl.configIndex);
+    if (idx.some((i) => i === undefined || !navConfig[i])) return;
+    const ids = idx as number[];
+    const positions = [...ids].sort((a, b) => a - b);
+    const next = navConfig.slice();
+    positions.forEach((pos, k) => {
+      next[pos] = navConfig[ids[k]];
+    });
+    await fetch("/api/settings", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ navSlots: next }),
+    }).catch(() => {});
+    router.refresh();
+  };
+  // Wraps a rail slot so it can be dragged above/below its neighbours. Index 0
+  // (Home) is a drop target only in the sense that dropping on it goes to 1.
+  const railDraggable = (node: ReactNode, i: number, id: string) => (
+    <div
+      key={`drag-${id}`}
+      draggable={i > 0}
+      onDragStart={(e) => {
+        if (i === 0) return;
+        e.dataTransfer.effectAllowed = "move";
+        e.dataTransfer.setData("text/plain", String(i));
+        setRailDrag({ from: i, over: null });
+      }}
+      onDragOver={(e) => {
+        if (!railDrag) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        if (railDrag.over !== i) setRailDrag({ ...railDrag, over: i });
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        const from = railDrag?.from ?? Number(e.dataTransfer.getData("text/plain"));
+        setRailDrag(null);
+        if (!Number.isFinite(from)) return;
+        void commitRailOrder(from, Math.max(1, i));
+      }}
+      onDragEnd={() => setRailDrag(null)}
+      className={`${i > 0 ? "cursor-grab active:cursor-grabbing" : ""} ${
+        railDrag && railDrag.over === i && railDrag.from !== i
+          ? railDrag.from > i
+            ? "shadow-[inset_0_2px_0_0_var(--accent)]"
+            : "shadow-[inset_0_-2px_0_0_var(--accent)]"
+          : ""
+      } rounded-lg`}
+    >
+      {node}
+    </div>
+  );
   // The phone bar reorders by hold-and-drag (ReorderableStrip): the order is
   // local state so the bar follows the finger, then the same permutation is
   // written to the stored phone list and the server re-resolves. Ids stay
@@ -1200,13 +1266,17 @@ export default function NavShell({
 
           {/* Slots. The rail's tools popovers open to the docked side. */}
           <div className="flex flex-col gap-1">
-            {desktopSlots.map(({ slot, id }) =>
-              renderSlot(
-                slot,
-                id,
-                railSize === "fat" ? railFatSlot : railThinSlot,
-                railSize === "fat",
-                "side"
+            {desktopSlots.map(({ slot, id }, i) =>
+              railDraggable(
+                renderSlot(
+                  slot,
+                  id,
+                  railSize === "fat" ? railFatSlot : railThinSlot,
+                  railSize === "fat",
+                  "side"
+                ),
+                i,
+                id
               )
             )}
           </div>

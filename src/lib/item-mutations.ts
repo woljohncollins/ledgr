@@ -695,6 +695,20 @@ export async function updateItem(
   // never reach here on completion (intercepted above — they advance instead of
   // finishing), so only genuinely-completed items are stamped.
   const stampType = patch.type ?? existing[0].type;
+  // Projects list order (John, 2026-10-06: "completed at the bottom"): the
+  // Projects view sorts by properties.projorder, so entering Done pushes the
+  // project past every open one (1e9 + now), and reopening parks it last among
+  // the open ones (now). Skipped when the patch replaces properties wholesale.
+  if (stampType === "project" && nextCategory !== undefined && patch.properties === undefined) {
+    const wasDone = existing[0].statusCategory === "done";
+    const entering = nextCategory === "done" && !wasDone;
+    const leaving = nextCategory !== "done" && wasDone;
+    if (entering || leaving) {
+      const bump = { projorder: entering ? 1_000_000_000 + Math.floor(Date.now() / 1000) : Date.now() };
+      const merged = { ...(patch.propertyPatch ?? {}), ...bump };
+      set.properties = sql`coalesce(${items.properties}, '{}'::jsonb) || ${JSON.stringify(merged)}::jsonb`;
+    }
+  }
   if ((stampType === "milestone" || stampType === "task") && nextCategory !== undefined) {
     const wasDone = existing[0].statusCategory === "done";
     const entering = nextCategory === "done" && !wasDone;
