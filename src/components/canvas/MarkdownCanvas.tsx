@@ -297,13 +297,38 @@ export default async function MarkdownCanvas({ item, ownerId, arrange = false }:
   // Image-kind properties (ADR-255) get their own box beside the person
   // picture rather than a bare url row in Properties below.
   const imageProps = propertySchema.filter((p) => p.kind === "image");
+  // A custom type's fields sit right under the title (John, 2026-10-06: the
+  // Visit date on a Ministry Visit was at the very bottom of a long note and
+  // read as missing). System types keep the bottom Properties panel.
+  const scalarProps = propertySchema.filter(
+    (pr) => pr.kind !== "image" && pr.kind !== "relation" && !(item.type === "person" && pr.key === "image")
+  );
+  const propsOnTop = typeDef ? !typeDef.isSystem && scalarProps.length > 0 : false;
+  const topProps = propsOnTop ? (
+    <div className="pt-2">
+      <CustomProperties
+        itemId={item.id}
+        typeKey={item.type}
+        schema={scalarProps}
+        initial={propsObj}
+        locked={locked}
+        hideHeading
+        bare
+      />
+    </div>
+  ) : null;
   return (
     <>
       <ItemEditor
         item={{ id: item.id, title: item.title, body: item.body }}
         fields={
-          fields.length > 0 ? (
-            <FieldStrip itemId={item.id} fields={fields} initial={strip} today={today} statuses={statuses} locked={locked} />
+          fields.length > 0 || topProps ? (
+            <>
+              {fields.length > 0 && (
+                <FieldStrip itemId={item.id} fields={fields} initial={strip} today={today} statuses={statuses} locked={locked} />
+              )}
+              {topProps}
+            </>
           ) : null
         }
         promoteToMeetingId={item.type === "event" ? item.id : undefined}
@@ -378,7 +403,11 @@ export default async function MarkdownCanvas({ item, ownerId, arrange = false }:
               // The person's Image and every image-kind property already have
               // their own box above, so a repeat row here would double them up.
               schema={propertySchema.filter(
-                (pr) => pr.kind !== "image" && !(item.type === "person" && pr.key === "image")
+                (pr) =>
+                  pr.kind !== "image" &&
+                  !(item.type === "person" && pr.key === "image") &&
+                  // Already shown under the title for a custom type.
+                  !(propsOnTop && pr.kind !== "relation")
               )}
               initial={propsObj}
               locked={locked}
