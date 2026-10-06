@@ -36,11 +36,20 @@ export default function ReorderableStrip({
   onMove,
   onCommit,
   className,
+  axis = "x",
+  mouseDrag = false,
 }: {
   items: StripItem[];
   onMove: (from: number, to: number) => void;
   onCommit: () => void;
   className?: string;
+  // Which way the strip runs: the target is the slot nearest the pointer along
+  // this axis. "y" for the desktop side rail (2026-10-06).
+  axis?: "x" | "y";
+  // With a mouse, arm on the first real movement instead of waiting for the
+  // hold — a desktop user expects press-and-drag, not press-hold-drag. Touch
+  // keeps the hold so a scroll is still a scroll.
+  mouseDrag?: boolean;
 }) {
   const [dragId, setDragId] = useState<string | null>(null);
   const wrappers = useRef(new Map<string, HTMLElement>());
@@ -104,8 +113,16 @@ export default function ReorderableStrip({
   const onPointerMove = (e: ReactPointerEvent<HTMLElement>) => {
     const h = hold.current;
     if (h) {
-      // Moved before the hold matured: a tap, a scroll, or the Launcher's drag.
-      if (Math.abs(e.clientX - h.x) > SLOP_PX || Math.abs(e.clientY - h.y) > SLOP_PX) clearHold();
+      // Moved before the hold matured: a tap, a scroll, or the Launcher's drag —
+      // unless this is a mouse on a mouseDrag strip, where movement IS the drag.
+      if (Math.abs(e.clientX - h.x) > SLOP_PX || Math.abs(e.clientY - h.y) > SLOP_PX) {
+        if (mouseDrag && e.pointerType === "mouse") {
+          clearTimeout(h.timer);
+          arm();
+        } else {
+          clearHold();
+        }
+      }
       return;
     }
     const d = drag.current;
@@ -121,7 +138,10 @@ export default function ReorderableStrip({
       const el = wrappers.current.get(it.id);
       if (!el) return;
       const r = el.getBoundingClientRect();
-      const dist = Math.abs(e.clientX - (r.left + r.width / 2));
+      const dist =
+        axis === "y"
+          ? Math.abs(e.clientY - (r.top + r.height / 2))
+          : Math.abs(e.clientX - (r.left + r.width / 2));
       if (dist < best) {
         best = dist;
         to = idx;
@@ -159,6 +179,11 @@ export default function ReorderableStrip({
           onPointerCancel={finish}
           onTouchMove={onTouchMove}
           onClickCapture={onClickCapture}
+          // The slot's <a> would otherwise start the browser's own link drag on
+          // the first mouse movement and swallow the pointer sequence.
+          onDragStart={(e) => {
+            if (!item.locked) e.preventDefault();
+          }}
           // The hold must not open the platform's own long-press menu (the iOS
           // link callout, the Android context menu) on a draggable slot.
           onContextMenu={(e) => {
