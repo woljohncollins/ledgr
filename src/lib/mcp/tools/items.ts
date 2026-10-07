@@ -13,7 +13,7 @@ import {
   stripAnchorFromLine,
 } from "@/lib/editor/block-anchor";
 import { ItemError, URGENCIES, getItem, getItemType } from "@/lib/items";
-import { createItem, moveItemType, updateItem } from "@/lib/item-mutations";
+import { createItem, moveItemType, softDeleteItem, updateItem } from "@/lib/item-mutations";
 import { MEMORY_TYPE, memoryAge, memoryFacets, memoryMarker, supersededByFor } from "@/lib/memory";
 import { resolveItemBodyTokens } from "@/lib/item-tokens-service";
 import { listRelatedItems, relateItems } from "@/lib/relations";
@@ -36,6 +36,25 @@ import { recurrenceView } from "./tasks";
 import type { McpTool } from "./wire";
 
 export const itemTools: McpTool[] = [
+  {
+    name: "trash_item",
+    title: "Move an item to Trash",
+    description:
+      "Move one item (and its subtasks) to the Trash - the same as the trash button on its page. " +
+      "Recoverable from Trash for 30 days, then purged. Confirm with the owner before calling this.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string", description: "The item id (UUID)." } },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+    handler: async (ownerId, args) => {
+      const id = asUuid(args.id, "id");
+      const trashed = await softDeleteItem(ownerId, id);
+      return { trashed };
+    },
+  },
   {
     name: "search_items",
     title: "Search items",
