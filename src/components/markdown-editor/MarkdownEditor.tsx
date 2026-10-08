@@ -355,6 +355,7 @@ function SwatchControl({
   open,
   onToggle,
   isDesktop,
+  onArm,
 }: {
   kind: "color" | "highlight";
   current: string;
@@ -362,6 +363,9 @@ function SwatchControl({
   open: boolean;
   onToggle: () => void;
   isDesktop: boolean;
+  // Fires on pointer-down of the toggle, BEFORE anything can steal focus: the
+  // editor remembers the current selection so a pick can re-apply it.
+  onArm?: () => void;
 }) {
   const { anchorRef, coords } = useAnchoredPanel<HTMLButtonElement>(
     open,
@@ -370,36 +374,96 @@ function SwatchControl({
   );
   const title = kind === "color" ? "Text color" : "Highlight";
 
-  // Mobile: the formatting bar is a horizontally-scrolling strip pinned above
-  // the keyboard, so an absolutely-positioned popover would be clipped by the
-  // scroll container (overflow-x:auto forces overflow-y:auto) and would open
-  // down into the keyboard. Fall back to a native <select> — the OS picker is
-  // unclipped, keyboard-safe, and idiomatic on touch. Desktop gets the swatch
-  // popover below.
-  if (!isDesktop) {
-    return (
-      <select
-        title={title}
-        aria-label={title}
-        className="h-7 rounded-md bg-surface-2 px-1 text-sm text-ink-muted"
-        value={current}
-        onChange={(e) => onPick((e.target.value || null) as HighlightColor | null)}
-      >
-        <option value="">{title}</option>
-        {COLOR_NAMES.map((c) => (
-          <option key={c} value={c}>{c}</option>
-        ))}
-        {kind === "highlight" && (
-          <option value={ACCENT_HIGHLIGHT}>my highlight</option>
-        )}
-      </select>
-    );
-  }
-
   const pick = (c: HighlightColor | null) => {
     onPick(c);
     onToggle();
   };
+
+  // Mobile: the formatting bar is a horizontally-scrolling strip pinned above
+  // the keyboard, so a popover would be clipped by it. This used to be a native
+  // <select>, but on iPhone opening the picker wheel took focus off the editor
+  // and dropped the selection, so the colour never landed (John, 2026-10-08:
+  // "it was not working on my phone"). Now: the A button expands a row of
+  // swatches INSIDE the strip; every button prevents default on pointer-down
+  // so the editor keeps focus and the selection, same as desktop.
+  if (!isDesktop) {
+    const keep = (e: { preventDefault: () => void }) => e.preventDefault();
+    return (
+      <span className="flex shrink-0 items-center gap-1">
+        <button
+          type="button"
+          title={title}
+          aria-label={title}
+          aria-expanded={open}
+          onPointerDown={(e) => {
+            keep(e);
+            onArm?.();
+          }}
+          onMouseDown={keep}
+          onClick={onToggle}
+          className={toolbarBtnClass(open || !!current)}
+        >
+          <span className="flex items-center gap-1">
+            {kind === "color" ? (
+              <span className="text-sm font-semibold leading-none">A</span>
+            ) : (
+              <span className="[&>svg]:h-3.5 [&>svg]:w-3.5">{TOOLBAR_ICONS.highlight}</span>
+            )}
+            <span
+              className="h-1 w-3.5 rounded-full"
+              style={{
+                backgroundColor: current
+                  ? swatchHex(kind, current as HighlightColor)
+                  : "var(--line-strong, #444)",
+                backgroundImage:
+                  current === ACCENT_HIGHLIGHT ? "var(--accent-highlight-image, none)" : undefined,
+              }}
+            />
+          </span>
+        </button>
+        {open && (
+          <>
+            <button
+              type="button"
+              title="None"
+              aria-label="No color"
+              onPointerDown={keep}
+              onMouseDown={keep}
+              onClick={() => pick(null)}
+              className="flex h-7 w-7 items-center justify-center rounded text-xs text-ink-subtle ring-1 ring-line"
+            >
+              ✕
+            </button>
+            {COLOR_NAMES.map((c) => (
+              <button
+                key={c}
+                type="button"
+                title={c}
+                aria-label={c}
+                onPointerDown={keep}
+                onMouseDown={keep}
+                onClick={() => pick(c)}
+                className={`h-7 w-7 shrink-0 rounded ring-1 ring-line ${current === c ? "ring-2 ring-ink" : ""}`}
+                style={{ backgroundColor: swatchHex(kind, c) }}
+              />
+            ))}
+            {kind === "highlight" && (
+              <button
+                type="button"
+                title="My highlight"
+                aria-label="My highlight"
+                onPointerDown={keep}
+                onMouseDown={keep}
+                onClick={() => pick(ACCENT_HIGHLIGHT)}
+                className={`h-7 w-7 shrink-0 rounded ring-1 ring-line ${current === ACCENT_HIGHLIGHT ? "ring-2 ring-ink" : ""}`}
+                style={{ backgroundColor: ACCENT_HIGHLIGHT_BG, backgroundImage: "var(--accent-highlight-image, none)" }}
+              />
+            )}
+          </>
+        )}
+      </span>
+    );
+  }
 
   return (
     <>
@@ -1172,6 +1236,7 @@ export default function MarkdownEditor({
   // Which color popover is open (text color / highlight), or null. Only one at a
   // time; a full-viewport backdrop closes it on an outside click.
   const [openSwatch, setOpenSwatch] = useState<null | "color" | "highlight">(null);
+  const armedSel = useRef<{ from: number; to: number } | null>(null);
 
   // Mobile editing posture (≥640px / `sm` is desktop and unaffected). On a phone
   // the toolbar becomes a single-row bar that floats on top of the on-screen
@@ -1222,17 +1287,33 @@ export default function MarkdownEditor({
   // highlight picker. The accent is a highlight-only value, and that picker
   // renders its swatch only for kind === "highlight", so it can't arrive here;
   // the guard makes that explicit rather than silently setting a bad attribute.
+  // The selection as it was when a colour picker was opened (mobile): if the
+  // editor's live selection has collapsed by the time a swatch is tapped, the
+  // mark is applied to the remembered range instead of to nothing.
+  const armSelection = () => {
+    const { from, to } = editor.state.selection;
+    armedSel.current = from === to ? null : { from, to };
+  };
+  const withSelection = () => {
+    const chain = editor.chain().focus();
+    const sel = armedSel.current;
+    if (sel && editor.state.selection.empty) chain.setTextSelection(sel);
+    return chain;
+  };
+
   const setColor = (color: HighlightColor | null) => {
     if (color === ACCENT_HIGHLIGHT) return;
-    const chain = editor.chain().focus();
+    const chain = withSelection();
     if (color) chain.setMark("textColor", { color }).run();
     else chain.unsetMark("textColor").run();
+    armedSel.current = null;
   };
 
   const setHighlight = (color: HighlightColor | null) => {
-    const chain = editor.chain().focus();
+    const chain = withSelection();
     if (color) chain.setMark("highlight", { color }).run();
     else chain.unsetMark("highlight").run();
+    armedSel.current = null;
   };
 
   // Slide mark (ADR-176). A plain toggle, unlike the two controls above: the mark
@@ -1498,6 +1579,7 @@ export default function MarkdownEditor({
                     open={openSwatch === "color"}
                     onToggle={() => setOpenSwatch(openSwatch === "color" ? null : "color")}
                     isDesktop={isDesktop}
+                    onArm={armSelection}
                   />
                 )}
                 {showHighlight && (
@@ -1508,6 +1590,7 @@ export default function MarkdownEditor({
                     open={openSwatch === "highlight"}
                     onToggle={() => setOpenSwatch(openSwatch === "highlight" ? null : "highlight")}
                     isDesktop={isDesktop}
+                    onArm={armSelection}
                   />
                 )}
                 {showSlide && (
