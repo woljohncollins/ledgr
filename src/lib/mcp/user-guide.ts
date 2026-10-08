@@ -423,6 +423,11 @@ Build your own kinds of item at \`/build/types\`.
   caret opens the list of what is already connected. The full **Linked here**
   panel under the body is still where you check things off, change their dates,
   or unlink them.
+- **Add people from your Outlook contacts.** The task rail's **People** "+"
+  searches your people and, under "From Outlook contacts", your Outlook
+  contacts too (the PC bridge exports them a few times a day). Picking a contact
+  creates the person with email, phone, church and role filled in and links them
+  to the task; someone already in Ledgr by that name shows once, as the person.
 - **+ Relate and + Task.** Under the panel, **+ Relate** links something that
   already exists, and **+ Task** creates a task already attached to this item
   (you can still send it to the Inbox or another project). **+ Task** is hidden
