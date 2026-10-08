@@ -1506,6 +1506,9 @@ export default function MarkdownEditor({
   const visibleGroups = groups
     .map((g) => g.filter((b) => showTb(b.id) && b.when !== false))
     .filter((g) => g.length > 0);
+  // The visible group the phone's colour pickers follow: the text group (its
+  // first button is Bold), else the first group.
+  const mobileColorAfter = Math.max(0, visibleGroups.findIndex((g) => g[0]?.id === "bold"));
   // The insert cluster (image / link / line-link) is rendered explicitly rather
   // than in the data array: its handlers read a DOM ref (the file input) / the
   // clipboard, which the refs lint rule won't allow inside a mapped structure.
@@ -1516,6 +1519,32 @@ export default function MarkdownEditor({
   const hasInsert = showImage || showAttach || showWeblink || showCopyLink;
   const showColor = showTb("color");
   const showHighlight = showTb("highlight");
+  const colorControls = (
+    <>
+      {showColor && (
+        <SwatchControl
+          kind="color"
+          current={toolbar.textColor}
+          onPick={setColor}
+          open={openSwatch === "color"}
+          onToggle={() => setOpenSwatch(openSwatch === "color" ? null : "color")}
+          isDesktop={isDesktop}
+          onArm={armSelection}
+        />
+      )}
+      {showHighlight && (
+        <SwatchControl
+          kind="highlight"
+          current={toolbar.highlight}
+          onPick={setHighlight}
+          open={openSwatch === "highlight"}
+          onToggle={() => setOpenSwatch(openSwatch === "highlight" ? null : "highlight")}
+          isDesktop={isDesktop}
+          onArm={armSelection}
+        />
+      )}
+    </>
+  );
   const showSlide = showTb("slide");
   const showComment = showTb("comment");
   const sep = <span className="mx-1 h-5 w-px shrink-0 bg-line" aria-hidden />;
@@ -1547,6 +1576,9 @@ export default function MarkdownEditor({
                 {g.map((b) => (
                   <ToolbarButton key={b.title} icon={b.icon} label={b.label} title={b.title} keys={b.keys} active={b.active} disabled={b.disabled} onClick={b.run} />
                 ))}
+                {/* Phone: text colour + highlight right after the text group
+                    (Bold/Italic/...), before the headings. */}
+                {!isDesktop && gi === mobileColorAfter && colorControls}
               </div>
             ))}
 
@@ -1571,28 +1603,10 @@ export default function MarkdownEditor({
             {(showColor || showHighlight || showSlide || showComment) && (
               <div className="flex items-center gap-0.5">
                 {(visibleGroups.length > 0 || hasInsert) && sep}
-                {showColor && (
-                  <SwatchControl
-                    kind="color"
-                    current={toolbar.textColor}
-                    onPick={setColor}
-                    open={openSwatch === "color"}
-                    onToggle={() => setOpenSwatch(openSwatch === "color" ? null : "color")}
-                    isDesktop={isDesktop}
-                    onArm={armSelection}
-                  />
-                )}
-                {showHighlight && (
-                  <SwatchControl
-                    kind="highlight"
-                    current={toolbar.highlight}
-                    onPick={setHighlight}
-                    open={openSwatch === "highlight"}
-                    onToggle={() => setOpenSwatch(openSwatch === "highlight" ? null : "highlight")}
-                    isDesktop={isDesktop}
-                    onArm={armSelection}
-                  />
-                )}
+                {/* On a phone the pickers sit up front, after Bold/Italic and
+                    before H1 (John, 2026-10-08) — see colorControls in the
+                    groups loop. Desktop keeps them here with slide/comment. */}
+                {isDesktop && colorControls}
                 {showSlide && (
                   <ToolbarButton
                     icon={TOOLBAR_ICONS.slide}
