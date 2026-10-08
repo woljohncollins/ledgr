@@ -13,20 +13,28 @@ import TypeRestoreButton from "@/components/trash/TypeRestoreButton";
 
 export const dynamic = "force-dynamic";
 
+function deletedMs(d: Date | string | null): number {
+  if (!d) return 0;
+  const t = (d instanceof Date ? d : new Date(d)).getTime();
+  return Number.isNaN(t) ? 0 : t;
+}
+const whenFmt = new Intl.DateTimeFormat("en-US", { month: "short", day: "2-digit", year: "numeric", hour: "numeric", minute: "2-digit" });
 function whenDeleted(d: Date | string | null): string {
-  if (!d) return "";
-  const date = d instanceof Date ? d : new Date(d);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString();
+  const t = deletedMs(d);
+  return t ? whenFmt.format(new Date(t)) : "";
 }
 
 export default async function TrashPage() {
   const owner = await resolveOwner();
   if (!owner) redirect("/sign-in");
-  const [trashed, deletedTypes, settings] = await Promise.all([
+  const [trashedRaw, deletedTypes, settings] = await Promise.all([
     listItems(owner.id, { trash: true, limit: 200 }),
     listDeletedTypes(),
     getSettings(owner.id),
   ]);
+  // Most recently deleted first (John, 2026-10-08) - the list query orders by
+  // update time, which is not the same thing once restores and edits mix in.
+  const trashed = [...trashedRaw].sort((a, b) => deletedMs(b.deletedAt) - deletedMs(a.deletedAt));
 
   return (
     <main className="min-h-screen">
