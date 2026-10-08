@@ -12,7 +12,7 @@ import {
   lineWithBlockId,
   stripAnchorFromLine,
 } from "@/lib/editor/block-anchor";
-import { ItemError, URGENCIES, getItem, getItemType } from "@/lib/items";
+import { ItemError, URGENCIES, getItem, getItemType, listItems } from "@/lib/items";
 import { createItem, moveItemType, purgeTrashedItem, softDeleteItem, updateItem } from "@/lib/item-mutations";
 import { MEMORY_TYPE, memoryAge, memoryFacets, memoryMarker, supersededByFor } from "@/lib/memory";
 import { resolveItemBodyTokens } from "@/lib/item-tokens-service";
@@ -36,6 +36,18 @@ import { recurrenceView } from "./tasks";
 import type { McpTool } from "./wire";
 
 export const itemTools: McpTool[] = [
+  {
+    name: "list_trash",
+    title: "List the Trash",
+    description: "Items currently in the Trash (soft-deleted, newest first): id, type, title, deletedAt. Use with purge_trashed_item.",
+    inputSchema: { type: "object", properties: { limit: { type: "integer", minimum: 1, maximum: 500 } }, additionalProperties: false },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    handler: async (ownerId, args) => {
+      const limit = typeof args.limit === "number" ? Math.min(500, Math.max(1, args.limit)) : 200;
+      const rows = await listItems(ownerId, { trash: true, limit });
+      return { count: rows.length, items: rows.map((r) => ({ id: r.id, type: r.type, title: r.title, deletedAt: r.deletedAt })) };
+    },
+  },
   {
     name: "purge_trashed_item",
     title: "Permanently delete a trashed item",
