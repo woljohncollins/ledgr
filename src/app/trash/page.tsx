@@ -9,6 +9,7 @@ import { listDeletedTypes } from "@/lib/types";
 import { resolveOwner } from "@/lib/owner";
 import { getSettings } from "@/lib/settings";
 import RestoreButton from "@/components/trash/RestoreButton";
+import PurgeButton from "@/components/trash/PurgeButton";
 import TypeRestoreButton from "@/components/trash/TypeRestoreButton";
 
 export const dynamic = "force-dynamic";
@@ -45,10 +46,13 @@ export default async function TrashPage() {
             ← Back
           </Link>
         </div>
-        <p className="mt-1 text-sm text-neutral-500">
-          Deleted items are kept for {settings.trashRetentionDays} days, then purged. Restore puts an item (and its
-          children) back where it was.
-        </p>
+        <div className="mt-1 flex items-start justify-between gap-3">
+          <p className="text-sm text-neutral-500">
+            Deleted items are kept for {settings.trashRetentionDays} days, then purged. Restore puts an item (and its
+            children) back where it was. Delete forever removes it now.
+          </p>
+          {trashed.length > 0 && <PurgeButton id="all" count={trashed.length} />}
+        </div>
 
         {deletedTypes.length > 0 && (
           <section className="mt-6">
@@ -100,7 +104,10 @@ export default async function TrashPage() {
                     {whenDeleted(it.deletedAt) && ` · deleted ${whenDeleted(it.deletedAt)}`}
                   </span>
                 </div>
-                <RestoreButton id={it.id} />
+                <span className="flex shrink-0 items-center gap-2">
+                  <RestoreButton id={it.id} />
+                  <PurgeButton id={it.id} />
+                </span>
               </li>
             ))}
             </ul>
