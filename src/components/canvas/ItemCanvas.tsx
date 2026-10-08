@@ -158,6 +158,7 @@ export default async function ItemCanvas({
           everywhere else it falls back to 0. */}
       <div
         data-toc-scope
+        data-item-type={item.type}
         className="canvas-wide"
         style={
           stickyChrome
