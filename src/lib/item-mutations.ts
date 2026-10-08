@@ -1148,6 +1148,38 @@ export async function restoreRevision(
 // then ages out, so the parent's hard delete can't hit an FK. Two
 // statements without a transaction is acceptable: a detach that lands
 // without its delete is retried by the next day's run.
+// Permanently delete ONE trashed item now, ahead of the retention window
+// (John, 2026-10-08: "delete the Claude Daily Reports that are deleted").
+// Owner-scoped and refuses anything not already in the Trash, so a live item
+// can never be hard-deleted by a typo. Trashed descendants go with it; a
+// live child (restored separately) is detached first, as the daily purge does.
+// Attachment bytes are left to the hygiene sweep (these are text items).
+export async function purgeTrashedItem(ownerId: string, id: string) {
+  const db = getDb();
+  const owned = await db.execute(sql`
+    select id from items where id = ${id} and owner_id = ${ownerId} and deleted_at is not null
+  `);
+  if (owned.rows.length === 0) throw new ItemError("not_found", "no trashed item with that id");
+  await db.execute(sql`
+    with recursive doomed as (
+      select id from items where id = ${id}
+      union
+      select i.id from items i join doomed d on i.parent_id = d.id where i.deleted_at is not null
+    )
+    update items set parent_id = null
+    where parent_id in (select id from doomed) and deleted_at is null
+  `);
+  const res = await db.execute(sql`
+    with recursive doomed as (
+      select id from items where id = ${id}
+      union
+      select i.id from items i join doomed d on i.parent_id = d.id where i.deleted_at is not null
+    )
+    delete from items where id in (select id from doomed) returning id
+  `);
+  return { purged: res.rows.length };
+}
+
 export async function purgeExpiredTrash() {
   const db = getDb();
   const cutoff = sql`now() - make_interval(days => ${TRASH_RETENTION_DAYS})`;

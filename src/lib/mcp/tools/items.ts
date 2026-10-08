@@ -13,7 +13,7 @@ import {
   stripAnchorFromLine,
 } from "@/lib/editor/block-anchor";
 import { ItemError, URGENCIES, getItem, getItemType } from "@/lib/items";
-import { createItem, moveItemType, softDeleteItem, updateItem } from "@/lib/item-mutations";
+import { createItem, moveItemType, purgeTrashedItem, softDeleteItem, updateItem } from "@/lib/item-mutations";
 import { MEMORY_TYPE, memoryAge, memoryFacets, memoryMarker, supersededByFor } from "@/lib/memory";
 import { resolveItemBodyTokens } from "@/lib/item-tokens-service";
 import { listRelatedItems, relateItems } from "@/lib/relations";
@@ -36,6 +36,22 @@ import { recurrenceView } from "./tasks";
 import type { McpTool } from "./wire";
 
 export const itemTools: McpTool[] = [
+  {
+    name: "purge_trashed_item",
+    title: "Permanently delete a trashed item",
+    description:
+      "Permanently delete an item that is ALREADY in the Trash, right now, instead of " +
+      "waiting for the retention window. Irreversible. Refuses live items. Only call " +
+      "when the owner has explicitly asked for permanent deletion.",
+    inputSchema: {
+      type: "object",
+      properties: { id: { type: "string", description: "The trashed item id (UUID)." } },
+      required: ["id"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    handler: async (ownerId, args) => purgeTrashedItem(ownerId, asUuid(args.id, "id")),
+  },
   {
     name: "trash_item",
     title: "Move an item to Trash",
