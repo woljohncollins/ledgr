@@ -1180,6 +1180,21 @@ export async function purgeTrashedItem(ownerId: string, id: string) {
   return { purged: res.rows.length };
 }
 
+// Empty the owner's Trash now (the page's "Empty Trash" button). Same shape
+// as purgeTrashedItem, over every trashed row the owner has.
+export async function purgeAllTrash(ownerId: string) {
+  const db = getDb();
+  await db.execute(sql`
+    update items set parent_id = null
+    where parent_id in (select id from items where owner_id = ${ownerId} and deleted_at is not null)
+      and deleted_at is null
+  `);
+  const res = await db.execute(sql`
+    delete from items where owner_id = ${ownerId} and deleted_at is not null returning id
+  `);
+  return { purged: res.rows.length };
+}
+
 export async function purgeExpiredTrash() {
   const db = getDb();
   const cutoff = sql`now() - make_interval(days => ${TRASH_RETENTION_DAYS})`;
