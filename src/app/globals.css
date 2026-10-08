@@ -622,6 +622,20 @@ mark.hl-accent {
    room and matches the grid's width (so entering Arrange doesn't jump). Scoped to
    the full-page wrapper ItemCanvas sets only for variant="page"; the modal is
    untouched. Specificity (.canvas-wide .max-w-3xl) beats the bare utility. */
+/* Ministry Visit headings read blue (John, 2026-10-08) so the sections of a
+   visit write-up stand apart from the notes under them. Scoped by the canvas
+   item type, so every other note keeps the theme heading colour. */
+[data-item-type="ministry_visit"] .ledgr-prose h1,
+[data-item-type="ministry_visit"] .ledgr-prose h2,
+[data-item-type="ministry_visit"] .ledgr-prose h3 {
+  color: #60a5fa;
+}
+:root[data-theme="light"] [data-item-type="ministry_visit"] .ledgr-prose h1,
+:root[data-theme="light"] [data-item-type="ministry_visit"] .ledgr-prose h2,
+:root[data-theme="light"] [data-item-type="ministry_visit"] .ledgr-prose h3 {
+  color: #1d4ed8;
+}
+
 .canvas-wide .max-w-3xl {
   max-width: 64rem;
 }
