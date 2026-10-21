@@ -38,21 +38,21 @@
    absolutely positioned .ledgr-foldable::before) in each heading's left gutter. */
 .ledgr-prose h1 {
   position: relative;
-  font-size: 1.6rem;
+  font-size: 1.6em;
   font-weight: 700;
   margin: 0.8rem 0 0.4rem;
 }
 
 .ledgr-prose h2 {
   position: relative;
-  font-size: 1.3rem;
+  font-size: 1.3em;
   font-weight: 700;
   margin: 0.7rem 0 0.35rem;
 }
 
 .ledgr-prose h3 {
   position: relative;
-  font-size: 1.1rem;
+  font-size: 1.1em;
   font-weight: 600;
   margin: 0.6rem 0 0.3rem;
 }

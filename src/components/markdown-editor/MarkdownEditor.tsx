@@ -15,7 +15,7 @@ import { TaskItem, TaskList } from "@tiptap/extension-list";
 import { Fragment, Slice } from "@tiptap/pm/model";
 import { TextSelection } from "@tiptap/pm/state";
 import type { EditorView } from "@tiptap/pm/view";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useAnchoredPanel } from "@/components/ui/Popover";
 import { TOOLBAR_ICONS } from "./toolbar-icons";
@@ -1236,6 +1236,25 @@ export default function MarkdownEditor({
   // Which color popover is open (text color / highlight), or null. Only one at a
   // time; a full-viewport backdrop closes it on an outside click.
   const [openSwatch, setOpenSwatch] = useState<null | "color" | "highlight">(null);
+  // Body text size (John, 2026-10-21): a task's notes (the compact canvas)
+  // start smaller than a document's, and A-/A+ in the bar nudge it a pixel at
+  // a time. Remembered per surface in this browser (localStorage), so it is a
+  // device preference and never a save. null = leave the global text-size
+  // setting (--prose-font-size from Settings) alone.
+  const fontKey = compact ? "ledgr.editorFontPx.task" : "ledgr.editorFontPx.doc";
+  const fontBase = compact ? 14 : 16;
+  const [fontPx, setFontPx] = useState<number | null>(() => {
+    try {
+      const v = Number(localStorage.getItem(fontKey));
+      if (v >= 10 && v <= 28) return v;
+    } catch {}
+    return compact ? fontBase : null;
+  });
+  const nudgeFont = (d: number) => {
+    const n = Math.min(28, Math.max(10, (fontPx ?? fontBase) + d));
+    setFontPx(n);
+    try { localStorage.setItem(fontKey, String(n)); } catch {}
+  };
   const armedSel = useRef<{ from: number; to: number } | null>(null);
 
   // Mobile editing posture (≥640px / `sm` is desktop and unaffected). On a phone
@@ -1486,6 +1505,10 @@ export default function MarkdownEditor({
       { id: "h2", title: "Heading 2", keys: "Mod-Alt-2", label: "H2", active: toolbar.isH2, run: () => editor.chain().focus().toggleHeading({ level: 2 }).run() },
     ],
     [
+      { id: "fontsize", title: "Smaller text", label: "A−", disabled: (fontPx ?? fontBase) <= 10, run: () => nudgeFont(-1) },
+      { id: "fontsize", title: "Larger text", label: "A+", disabled: (fontPx ?? fontBase) >= 28, run: () => nudgeFont(1) },
+    ],
+    [
       { id: "bulletList", title: "Bullet list", keys: "Mod-Shift-8", icon: TOOLBAR_ICONS.bulletList, active: toolbar.isBulletList, run: () => editor.chain().focus().toggleBulletList().run() },
       { id: "orderedList", title: "Numbered list", keys: "Mod-Shift-7", icon: TOOLBAR_ICONS.orderedList, active: toolbar.isOrderedList, run: () => editor.chain().focus().toggleOrderedList().run() },
       { id: "tasks", title: "Checklist (- [ ])", keys: "Mod-Shift-9", icon: TOOLBAR_ICONS.tasks, active: toolbar.isTaskList, run: () => editor.chain().focus().toggleTaskList().run() },
@@ -1663,7 +1686,11 @@ export default function MarkdownEditor({
     // The closing rule is chrome for a full-height document body; a compact body
     // (task canvas, widget, dashboard embed) sits inline above other content, so
     // the rule just stacks another hairline into the pane (Tyler, 2026-08-14).
-    <div ref={wrapRef} className={`relative${compact ? "" : " border-b border-line"}`}>
+    <div
+      ref={wrapRef}
+      className={`relative${compact ? "" : " border-b border-line"}`}
+      style={fontPx ? ({ "--prose-font-size": `${fontPx}px` } as CSSProperties) : undefined}
+    >
       {/* The formatting bar is hidden on a locked item (nothing here can act on a
           read-only document). On desktop it merges with the body's view-mode
           controls (viewControls, right-aligned) into one bar; when the collapse
