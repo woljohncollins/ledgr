@@ -13,7 +13,7 @@
 // guessing, no model in the create path.
 "use client";
 
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { showToast } from "@/components/ui/ActionToast";
 import { openItem } from "@/lib/item-nav";
@@ -85,6 +85,21 @@ export default function InlineViewAdd({
   const label = type.replace(/_/g, " ");
   const article = /^[aeiou]/i.test(label) ? "an" : "a";
   const [busy, setBusy] = useState(false);
+  // iPhone keyboard warm-up (John, 2026-10-29: "cursor in the title on the
+  // iphone"). iOS Safari only opens the keyboard for a focus() that happens
+  // inside the user's tap; the new item's title is focused later, after the
+  // create request and the popup mount, so the phone ignored it. Focusing this
+  // invisible input synchronously in the tap puts the page in "editing" state,
+  // and iOS then lets ItemEditor move focus to the title when it mounts.
+  const warmRef = useRef<HTMLInputElement>(null);
+  const warmKeyboard = () => {
+    const el = warmRef.current;
+    if (!el || typeof window === "undefined" || !("ontouchstart" in window)) return;
+    el.focus({ preventScroll: true });
+    // If nothing took the focus over (create failed, popup never mounted),
+    // let the keyboard go again instead of leaving it up on a dead input.
+    window.setTimeout(() => { if (document.activeElement === el) el.blur(); }, 4000);
+  };
 
   // Same inherit rules as the inline add (type, today-window date, focus stamp,
   // dashboard focus relation), then straight into the item popup.
@@ -135,9 +150,16 @@ export default function InlineViewAdd({
   if (mode === "dialog") {
     return (
       <div className="shrink-0 px-2 pt-1.5">
+        <input
+          ref={warmRef}
+          aria-hidden
+          tabIndex={-1}
+          autoCapitalize="sentences"
+          style={{ position: "fixed", top: 0, left: 0, width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
+        />
         <button
           type="button"
-          onClick={() => void addViaDialog()}
+          onClick={() => { warmKeyboard(); void addViaDialog(); }}
           disabled={busy}
           className="cancel-drag w-full rounded border border-dashed border-line px-2 py-1 text-left text-sm text-ink-muted hover:border-line-strong hover:bg-surface-2 hover:text-ink disabled:opacity-60"
         >

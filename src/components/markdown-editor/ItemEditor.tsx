@@ -145,7 +145,17 @@ export default function ItemEditor({
   useEffect(() => {
     if (didAutofocus.current || slot === "body") return;
     didAutofocus.current = true;
-    if (item.title === "") titleRef.current?.focus();
+    if (item.title === "") {
+      titleRef.current?.focus();
+      // Phone popup: the modal's enter transition can mount the textarea before
+      // it is focusable; try once more after it settles (keeps the keyboard that
+      // InlineViewAdd's warm-up opened in the tap).
+      const again = window.setTimeout(() => {
+        const el = titleRef.current;
+        if (el && document.activeElement !== el && (!document.activeElement || document.activeElement.tagName !== "TEXTAREA")) el.focus();
+      }, 250);
+      return () => window.clearTimeout(again);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
