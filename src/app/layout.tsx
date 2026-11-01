@@ -7,6 +7,7 @@ import DeskSendContextMenu from "@/components/desk/DeskSendMenu";
 import Nav from "@/components/nav/Nav";
 import NavProgress from "@/components/nav/NavProgress";
 import PwaRegister from "@/components/pwa/PwaRegister";
+import PullToRefresh from "@/components/pwa/PullToRefresh";
 import OutboxSync from "@/components/pwa/OutboxSync";
 import { AppAuthProvider } from "@/lib/auth/provider";
 import { TimezoneProvider } from "@/components/providers/TimezoneProvider";
@@ -184,6 +185,7 @@ export default async function RootLayout({
         >
           <style dangerouslySetInnerHTML={{ __html: uiScaleCss }} />
           <NavProgress />
+          <PullToRefresh />
           <TimezoneProvider tz={tz}>
             {children}
             <Nav />
