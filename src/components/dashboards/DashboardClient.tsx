@@ -179,6 +179,11 @@ export default function DashboardClient({
     const maybeRefresh = () => {
       if (document.visibilityState !== "visible") return;
       if (editMode || timer.current || settingsTimer.current) return;
+      // An item popup is open on top (it owns the URL): a refresh now re-renders
+      // the popup's server props mid-edit for no gain, and reads as the page
+      // "going away and coming back" (John, 2026-11-02). The popup's own close
+      // path refreshes this surface once the edit has landed.
+      if (document.body.dataset.itemPanel === "open") return;
       if (Date.now() - lastRefresh.current < 60_000) return;
       lastRefresh.current = Date.now();
       router.refresh();
