@@ -31,6 +31,7 @@ import ShareButton from "./ShareButton";
 import ActionGlyph from "@/components/canvas/action-icons";
 import TypeCue from "@/components/canvas/TypeCue";
 import type { ItemOpenMode } from "@/lib/settings";
+import { requestSaveRetry, waitForSaves } from "@/lib/save-status";
 
 // The content region must be at least this wide (px, inside the nav frame) for
 // the peek panel; below it the center modal is the better use of space. Matches
@@ -169,14 +170,21 @@ export default function Modal({
   // Esc, the ✕, the center backdrop, sheet-dismiss, and the post-delete path.
   // Once the URL has moved on there's nothing to pop — the panel is the only
   // thing left to close, so just unmount it and leave the main pane alone.
+  const closing = useRef(false);
   const close = useCallback(() => {
-    if (stale) setDismissed(true);
-    else {
+    if (stale) { setDismissed(true); return; }
+    if (closing.current) return;
+    closing.current = true;
+    // Land every pending edit FIRST (title/body debounce, in-flight PATCHes),
+    // then leave: the surface underneath refetches on the way back, and it must
+    // see the saved row, not the one from before the edit (2026-11-02).
+    requestSaveRetry();
+    void waitForSaves(4000).then(() => {
       router.back();
       // The launching page may hold a client-cached RSC payload from before any
       // edits made in here (2026-09-23): refetch it once the back() has landed.
       setTimeout(() => router.refresh(), 150);
-    }
+    });
   }, [router, stale]);
   // No reset needed: opening another item swaps loading.tsx into the slot, which
   // remounts this component with a fresh `dismissed`.

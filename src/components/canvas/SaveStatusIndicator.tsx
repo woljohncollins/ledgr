@@ -16,7 +16,7 @@ import { useEffect, useState } from "react";
 import {
   consumeLocalSave,
   getKnownVersion,
-  hasPendingEdits,
+
   requestForceSave,
   requestSaveRetry,
   setKnownVersion,
@@ -69,10 +69,11 @@ export default function SaveStatusIndicator({
         // when the owner has their own unsaved work do we stop and ask, so a
         // reload can't drop it.
         setKnownVersion(updatedAt);
-        if (!consumeLocalSave()) {
-          if (hasPendingEdits()) setStale(true);
-          else window.location.reload();
-        }
+        // Never reload the page on our own (2026-11-02): a full reload mid-work
+        // is the "system goes away and comes back" John kept hitting, and a
+        // field save that bumps updated_at without advancing knownVersion made
+        // it fire on ordinary edits. Always offer the banner instead.
+        if (!consumeLocalSave()) setStale(true);
       } catch {
         // A failed version check is non-fatal: leave the baseline as-is.
       }

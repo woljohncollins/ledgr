@@ -171,6 +171,23 @@ export function hasPendingEdits(): boolean {
   return false;
 }
 
+// Resolve once no editor has a queued or in-flight save (or after timeoutMs).
+// Used by the item popup's close (John, 2026-11-02: an edit made just before
+// closing "does not show up and I need to redo it"): the close used to fire
+// router.back() and three refreshes while the editor's unmount PATCH was still
+// in flight, so the list underneath re-rendered from the pre-edit row. Now the
+// popup flushes every editor, waits here, and only then navigates.
+export function waitForSaves(timeoutMs = 4000): Promise<void> {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const tick = () => {
+      if ((inFlight === 0 && !hasPendingEdits()) || Date.now() - started > timeoutMs) resolve();
+      else setTimeout(tick, 50);
+    };
+    tick();
+  });
+}
+
 function getSnapshot() {
   return conflicted ? "conflict" : state;
 }
