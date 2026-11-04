@@ -13,7 +13,7 @@
 // guessing, no model in the create path.
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { showToast } from "@/components/ui/ActionToast";
 import { openItem } from "@/lib/item-nav";
@@ -85,25 +85,15 @@ export default function InlineViewAdd({
   const label = type.replace(/_/g, " ");
   const article = /^[aeiou]/i.test(label) ? "an" : "a";
   const [busy, setBusy] = useState(false);
-  // iPhone keyboard warm-up (John, 2026-10-29: "cursor in the title on the
-  // iphone"). iOS Safari only opens the keyboard for a focus() that happens
-  // inside the user's tap; the new item's title is focused later, after the
-  // create request and the popup mount, so the phone ignored it. Focusing this
-  // invisible input synchronously in the tap puts the page in "editing" state,
-  // and iOS then lets ItemEditor move focus to the title when it mounts.
-  const warmRef = useRef<HTMLInputElement>(null);
-  const warmKeyboard = () => {
-    const el = warmRef.current;
-    if (!el || typeof window === "undefined" || !("ontouchstart" in window)) return;
-    el.focus({ preventScroll: true });
-    // If nothing took the focus over (create failed, popup never mounted),
-    // let the keyboard go again instead of leaving it up on a dead input.
-    window.setTimeout(() => { if (document.activeElement === el) el.blur(); }, 4000);
-  };
-
-  // Same inherit rules as the inline add (type, today-window date, focus stamp,
-  // dashboard focus relation), then straight into the item popup.
-  async function addViaDialog() {
+  // Title-first (John, 2026-11-04, third report of a dead click leaving an
+  // "Untitled" task): the button no longer creates anything. It turns into a
+  // title box; Enter creates the task WITH that title, then opens the popup.
+  // So a failed open can never strand a blank task - the worst case is a titled
+  // task sitting in the list, which is still the task he wanted. On a phone the
+  // tap focuses the box directly, so the keyboard opens without any warm-up.
+  const [arming, setArming] = useState(false);
+  const [draft, setDraft] = useState("");
+  async function addViaDialog(title: string) {
     if (busy) return;
     setBusy(true);
     try {
@@ -113,7 +103,7 @@ export default function InlineViewAdd({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           type,
-          title: "",
+          title,
           ...(date && today
             ? {
                 [date.field]: `${today}T00:00:00.000Z`,
@@ -132,17 +122,12 @@ export default function InlineViewAdd({
           body: JSON.stringify({ targetId: host }),
         }).catch(() => {});
       }
-      // Open the popup FIRST, then refresh the list behind it. A refresh fired in
-      // the same tick as the push could swallow the push (John, 2026-11-03: "I
-      // click the button and it does nothing, I restart and it works"). And if
-      // the intercepting popup still fails to mount, fall back to a real
-      // navigation to the item page rather than leaving him with nothing.
+      setDraft("");
+      setArming(false);
+      // Open the popup, then refresh the list behind it. If the intercepting
+      // popup fails to mount (the URL can change while the slot renders nothing),
+      // hard-load the item page instead; only the mounted Modal's body flag counts.
       openItem(router, item.id);
-      // 2026-11-04, second report: the URL CAN change to /items/<id> while the
-      // intercepting popup slot still renders nothing (a stale parallel-route
-      // cache after a previous close). So the URL is not proof the popup is up;
-      // only the body flag the mounted Modal sets counts. No flag → hard-load
-      // the item page, which always renders.
       window.setTimeout(() => {
         if (document.body.dataset.itemPanel === "open") {
           router.refresh();
@@ -166,21 +151,36 @@ export default function InlineViewAdd({
   if (mode === "dialog") {
     return (
       <div className="shrink-0 px-2 pt-1.5">
-        <input
-          ref={warmRef}
-          aria-hidden
-          tabIndex={-1}
-          autoCapitalize="sentences"
-          style={{ position: "fixed", top: 0, left: 0, width: 1, height: 1, opacity: 0, pointerEvents: "none" }}
-        />
-        <button
-          type="button"
-          onClick={() => { warmKeyboard(); void addViaDialog(); }}
-          disabled={busy}
-          className="cancel-drag w-full rounded border border-dashed border-line px-2 py-1 text-left text-sm text-ink-muted hover:border-line-strong hover:bg-surface-2 hover:text-ink disabled:opacity-60"
-        >
-          {busy ? "Creating…" : `+ New ${label}…`}
-        </button>
+        {arming ? (
+          <input
+            autoFocus
+            value={draft}
+            disabled={busy}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                const t = draft.trim();
+                if (t) void addViaDialog(t);
+              } else if (e.key === "Escape") {
+                setDraft("");
+                setArming(false);
+              }
+            }}
+            onBlur={() => { if (!draft.trim() && !busy) setArming(false); }}
+            placeholder={busy ? "Creating…" : `${label[0].toUpperCase() + label.slice(1)} title, then Enter`}
+            aria-label={`New ${label} title`}
+            className="cancel-drag w-full rounded border border-line bg-surface-2 px-2 py-1 text-sm text-ink placeholder:text-ink-faint focus:outline-none disabled:opacity-60"
+          />
+        ) : (
+          <button
+            type="button"
+            onClick={() => setArming(true)}
+            className="cancel-drag w-full rounded border border-dashed border-line px-2 py-1 text-left text-sm text-ink-muted hover:border-line-strong hover:bg-surface-2 hover:text-ink"
+          >
+            {`+ New ${label}…`}
+          </button>
+        )}
       </div>
     );
   }
