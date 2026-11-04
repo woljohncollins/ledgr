@@ -165,9 +165,49 @@ export default function AgendaDnd({
     if (sameSpot) return;
 
     const before = moves[id];
+    const value = slot.day === AGENDA_UNDATED ? null : dayIso(slot.day);
+
+    // Unnumbered neighbours (John, 2026-11-04: "Dennis net pickup at house"
+    // would not drag). Rows with no dayorder sort LAST (null = +Infinity), but
+    // placeBetween treated a null neighbour as "no neighbour" and handed out
+    // ORDER_STEP - which sorts BEFORE every unnumbered row, so a drop below one
+    // snapped straight back. If any row in the target priority band has no
+    // number, renumber the whole band in its displayed order (self included),
+    // one PATCH per row, so the order on screen is the order on the server.
+    const bandOthers = others.filter((r) => prio(r.urgency) === prio(urgency));
+    if (bandOthers.some((r) => r.order == null)) {
+      const bandIdx = others.slice(0, idx).filter((r) => prio(r.urgency) === prio(urgency)).length;
+      const bandIds = bandOthers.map((r) => r.id);
+      bandIds.splice(bandIdx, 0, id);
+      const dayOf = (rid: string) => shown.find((d) => d.rows.some((r) => r.id === rid))?.key ?? slot.day;
+      const prevMoves = moves;
+      setMoves((m) => {
+        const nx = { ...m };
+        bandIds.forEach((rid, i) => {
+          const row = rid === id ? self : bandOthers.find((r) => r.id === rid)!;
+          nx[rid] = { day: rid === id ? slot.day : dayOf(rid), urgency: rid === id ? urgency : row.urgency, order: (i + 1) * ORDER_STEP };
+        });
+        return nx;
+      });
+      const writes = bandIds.map((rid, i) =>
+        fetch(`/api/items/${rid}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(
+            rid === id
+              ? { scheduledDate: value, dueDate: value, urgency, propertyPatch: { dayorder: (i + 1) * ORDER_STEP } }
+              : { propertyPatch: { dayorder: (i + 1) * ORDER_STEP } }
+          ),
+        }).then((res) => { if (!res.ok) throw new Error(String(res.status)); })
+      );
+      Promise.all(writes)
+        .then(() => router.refresh())
+        .catch(() => setMoveState({ base: days, moves: prevMoves }));
+      return;
+    }
+
     const next: Placement = { day: slot.day, urgency, order };
     setMoves((m) => ({ ...m, [id]: next }));
-    const value = slot.day === AGENDA_UNDATED ? null : dayIso(slot.day);
     const body: Record<string, unknown> = {
       scheduledDate: value,
       dueDate: value,
