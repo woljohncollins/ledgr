@@ -31,6 +31,16 @@ const MENU_WIDTH = 256;
 
 type Chip = { id: string; title: string };
 type Hit = { id: string; type: string; title: string };
+// A row from the owner's Outlook contacts directory (/api/contacts/search),
+// offered only by a person-typed field. Picking one makes the person, then links.
+type ContactHit = {
+  id: string;
+  name: string;
+  email: string | null;
+  phone: string | null;
+  company: string | null;
+  title: string | null;
+};
 
 export default function RelationField({
   itemId,
@@ -65,6 +75,7 @@ export default function RelationField({
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<Hit[]>([]);
+  const [contactHits, setContactHits] = useState<ContactHit[]>([]);
   const [active, setActive] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(false);
@@ -101,7 +112,13 @@ export default function RelationField({
     }
     return createTargets(types, null);
   }, [showCreate, targetType, targetTypeLabel, types]);
-  const rowCount = hits.length + targets.length;
+  // Outlook contacts already in Ledgr (same name) are hidden: the person row
+  // above is the one to pick, so a contact never mints a duplicate.
+  const contactRows = useMemo(() => {
+    const have = new Set(hits.map((h) => h.title.trim().toLowerCase()));
+    return contactHits.filter((c) => !have.has(c.name.trim().toLowerCase()));
+  }, [contactHits, hits]);
+  const rowCount = hits.length + contactRows.length + targets.length;
 
   useEffect(() => {
     if (!open || !trimmed) return;
@@ -110,7 +127,18 @@ export default function RelationField({
       try {
         const params = new URLSearchParams({ q: trimmed, limit: "8" });
         if (targetType) params.set("type", targetType);
-        const res = await fetch(`/api/items?${params}`, { signal: ctrl.signal });
+        const [res, cres] = await Promise.all([
+          fetch(`/api/items?${params}`, { signal: ctrl.signal }),
+          targetType === "person"
+            ? fetch(`/api/contacts/search?q=${encodeURIComponent(trimmed)}`, { signal: ctrl.signal }).catch(() => null)
+            : Promise.resolve(null),
+        ]);
+        if (cres?.ok) {
+          const cdata = (await cres.json()) as { hits?: ContactHit[] };
+          setContactHits((cdata.hits ?? []).slice(0, 6));
+        } else {
+          setContactHits([]);
+        }
         if (!res.ok) return;
         const data = (await res.json()) as { items: Hit[] };
         const linked = new Set(chips.map((c) => c.id));
@@ -160,6 +188,7 @@ export default function RelationField({
       await fn();
       setQ("");
       setHits([]);
+      setContactHits([]);
       setOpen(false);
       router.refresh();
     } catch {
@@ -171,6 +200,25 @@ export default function RelationField({
 
   const onPick = (hit: Hit) =>
     guard(() => relateTarget({ id: hit.id, title: hit.title || "Untitled" }));
+
+  // An Outlook contact: create the person with the contact's details filled in
+  // (same mapping as the dashboard's "+ New person" lookup), then link them.
+  const onPickContact = (c: ContactHit) =>
+    guard(async () => {
+      const properties: Record<string, unknown> = { outlookid: c.id };
+      if (c.email) properties.email = c.email;
+      if (c.phone) properties.phone = c.phone;
+      if (c.company) properties.church = c.company;
+      if (c.title) properties.role = c.title;
+      const res = await fetch("/api/items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: "person", title: c.name, properties }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const { item } = (await res.json()) as { item: { id: string } };
+      await relateTarget({ id: item.id, title: c.name });
+    });
 
   // Create as the picked type, then link it. Only the "Unsorted" catch-all still
   // lands in the Inbox (needsTriage, in the shared creator) — a named type with a
@@ -201,8 +249,10 @@ export default function RelationField({
     } else if (e.key === "Enter") {
       e.preventDefault();
       if (active < hits.length) void onPick(hits[active]);
-      else {
-        const target = targets[active - hits.length];
+      else if (active < hits.length + contactRows.length) {
+        void onPickContact(contactRows[active - hits.length]);
+      } else {
+        const target = targets[active - hits.length - contactRows.length];
         if (target) void onCreate(target);
       }
     } else if (e.key === "Escape") {
@@ -259,7 +309,10 @@ export default function RelationField({
             value={q}
             onChange={(e) => {
               setQ(e.target.value);
-              if (!e.target.value.trim()) setHits([]);
+              if (!e.target.value.trim()) {
+                setHits([]);
+                setContactHits([]);
+              }
             }}
             onKeyDown={onKeyDown}
             onBlur={() => {
@@ -271,7 +324,7 @@ export default function RelationField({
             }
             className="w-48 max-w-full rounded border border-neutral-700 bg-transparent px-2 py-0.5 text-sm text-neutral-200 placeholder:text-neutral-600 focus:border-neutral-500 focus:outline-none disabled:opacity-50"
           />
-          {(hits.length > 0 || showCreate) &&
+          {(hits.length > 0 || contactRows.length > 0 || showCreate) &&
             coords &&
             createPortal(
             <ul
@@ -306,6 +359,31 @@ export default function RelationField({
                   </button>
                 </li>
               ))}
+              {/* Outlook contacts not yet in Ledgr (person fields only). */}
+              {contactRows.length > 0 && (
+                <li className="px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-500">
+                  From Outlook contacts
+                </li>
+              )}
+              {contactRows.map((c, n) => (
+                <li key={c.id}>
+                  <button
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      void onPickContact(c);
+                    }}
+                    onMouseEnter={() => setActive(hits.length + n)}
+                    className={`flex w-full flex-col items-start px-2 py-1 text-left text-sm ${
+                      active === hits.length + n ? "bg-neutral-800 text-neutral-100" : "text-neutral-300"
+                    }`}
+                  >
+                    <span className="max-w-full truncate">{c.name}</span>
+                    <span className="max-w-full truncate text-xs text-neutral-500">
+                      {[c.company, c.title, c.email].filter(Boolean).join(" · ")}
+                    </span>
+                  </button>
+                </li>
+              ))}
               {/* Create-on-miss. A typed field yields one row (its own type); a
                   generic one yields a row per type the name could be, so the
                   question is asked instead of answered with a stub. */}
@@ -316,9 +394,9 @@ export default function RelationField({
                       e.preventDefault();
                       void onCreate(target);
                     }}
-                    onMouseEnter={() => setActive(hits.length + n)}
+                    onMouseEnter={() => setActive(hits.length + contactRows.length + n)}
                     className={`flex w-full items-center gap-1 px-2 py-1 text-left text-sm ${
-                      active === hits.length + n ? "bg-neutral-800" : ""
+                      active === hits.length + contactRows.length + n ? "bg-neutral-800" : ""
                     }`}
                   >
                     <span className="text-neutral-400">Create</span>
