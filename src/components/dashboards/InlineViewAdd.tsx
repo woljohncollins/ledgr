@@ -138,8 +138,13 @@ export default function InlineViewAdd({
       // the intercepting popup still fails to mount, fall back to a real
       // navigation to the item page rather than leaving him with nothing.
       openItem(router, item.id);
+      // 2026-11-04, second report: the URL CAN change to /items/<id> while the
+      // intercepting popup slot still renders nothing (a stale parallel-route
+      // cache after a previous close). So the URL is not proof the popup is up;
+      // only the body flag the mounted Modal sets counts. No flag → hard-load
+      // the item page, which always renders.
       window.setTimeout(() => {
-        if (document.body.dataset.itemPanel === "open" || location.pathname.startsWith(`/items/${item.id}`)) {
+        if (document.body.dataset.itemPanel === "open") {
           router.refresh();
         } else {
           window.location.assign(`/items/${item.id}`);
