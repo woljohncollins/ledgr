@@ -132,8 +132,19 @@ export default function InlineViewAdd({
           body: JSON.stringify({ targetId: host }),
         }).catch(() => {});
       }
-      router.refresh();
+      // Open the popup FIRST, then refresh the list behind it. A refresh fired in
+      // the same tick as the push could swallow the push (John, 2026-11-03: "I
+      // click the button and it does nothing, I restart and it works"). And if
+      // the intercepting popup still fails to mount, fall back to a real
+      // navigation to the item page rather than leaving him with nothing.
       openItem(router, item.id);
+      window.setTimeout(() => {
+        if (document.body.dataset.itemPanel === "open" || location.pathname.startsWith(`/items/${item.id}`)) {
+          router.refresh();
+        } else {
+          window.location.assign(`/items/${item.id}`);
+        }
+      }, 1200);
     } catch {
       showToast(`Couldn't create ${article} ${label}`);
     } finally {
