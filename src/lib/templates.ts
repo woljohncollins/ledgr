@@ -12,6 +12,7 @@ import { getDb } from "@/db";
 import { items, relations, templates, types } from "@/db/schema";
 import { isItemBody, type ItemBody } from "@/lib/body";
 import { cloneItemSubtree } from "@/lib/clone";
+import { bibleBookOrder } from "@/lib/bible-books";
 import { getItem, ItemError } from "@/lib/items";
 import {
   createItem,
@@ -501,6 +502,18 @@ export async function createItemFromTemplate(
     rootId,
     root.scheduledDate ? dateToYmdUtc(root.scheduledDate) : null
   );
+  // A sermon note made from its template has its Passage filled by an {{ask}};
+  // give it its Bible book order now so the by-book view sorts it at once.
+  if (root.type === "sermon_note") {
+    const props = (root.properties as Record<string, unknown> | null) ?? {};
+    const order = bibleBookOrder(props.passage);
+    if (order != null && props.bookorder !== order) {
+      await getDb()
+        .update(items)
+        .set({ properties: { ...props, bookorder: order } })
+        .where(and(eq(items.id, rootId), eq(items.ownerId, ownerId)));
+    }
+  }
   return getItem(ownerId, rootId);
 }
 
