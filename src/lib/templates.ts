@@ -179,7 +179,14 @@ export async function listTemplatesForPicker(
   ownerId: string,
   type?: string
 ): Promise<TemplatePickerEntry[]> {
-  const typeCond = type ? sql` and t.type = ${type}` : sql``;
+  // The Notes "+ New" menu also offers the note-like types' templates (John,
+  // 2026-11-17: he looked for Sermon Note under Notes). The template creates an
+  // item of its OWN type, so nothing else changes.
+  const typeCond = !type
+    ? sql``
+    : type === "note"
+      ? sql` and t.type in ('note', 'sermon_note', 'ministry_visit')`
+      : sql` and t.type = ${type}`;
   const res = await getDb().execute(sql`
     select t.id, t.name, t.is_default as "isDefault",
       (p.body is not null) as "hasBody",
