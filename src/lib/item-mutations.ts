@@ -46,6 +46,7 @@ import { shiftChildDates, type ShiftedChild } from "@/lib/relative-subtask-servi
 import { dayDelta, isDuePinned, shiftDay } from "@/lib/date-anchor";
 import { mirrorTaskDates } from "@/lib/one-date";
 import { autoLinkTaskToProject } from "@/lib/project-autolink";
+import { bibleBookOrder } from "@/lib/bible-books";
 import {
   appTodayYmd,
   completeMaterializedOccurrence,
@@ -632,12 +633,20 @@ export async function updateItem(
   // date is chosen it is added to the end of the name"). Picking a Visit date
   // rewrites the title as "<name> — Oct 07, 2026"; clearing it drops the suffix.
   // The name part is whatever precedes an existing " — <date>" suffix.
-  if ((patch.type ?? existing[0].type) === "ministry_visit") {
+  // Sermon Note (2026-11-17) uses the same rule on its Sermon date, and also
+  // keeps "Bible book order" in step with the Passage so the by-book view sorts.
+  const dateTitleKey: Record<string, string> = { ministry_visit: "visit_date", sermon_note: "sermondate" };
+  const effType = patch.type ?? existing[0].type;
+  if (effType === "sermon_note" && patch.propertyPatch && "passage" in patch.propertyPatch) {
+    patch = { ...patch, propertyPatch: { ...patch.propertyPatch, bookorder: bibleBookOrder(patch.propertyPatch.passage) } };
+  }
+  if (dateTitleKey[effType]) {
+    const dk = dateTitleKey[effType];
     const vd =
-      patch.propertyPatch && "visit_date" in patch.propertyPatch
-        ? patch.propertyPatch.visit_date
-        : patch.properties && typeof patch.properties === "object" && "visit_date" in (patch.properties as object)
-          ? (patch.properties as Record<string, unknown>).visit_date
+      patch.propertyPatch && dk in patch.propertyPatch
+        ? patch.propertyPatch[dk]
+        : patch.properties && typeof patch.properties === "object" && dk in (patch.properties as object)
+          ? (patch.properties as Record<string, unknown>)[dk]
           : undefined;
     if (vd !== undefined) {
       const current = patch.title ?? (await getItem(ownerId, id)).title ?? "";

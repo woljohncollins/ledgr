@@ -627,12 +627,18 @@ mark.hl-accent {
    item type, so every other note keeps the theme heading colour. */
 [data-item-type="ministry_visit"] .ledgr-prose h1,
 [data-item-type="ministry_visit"] .ledgr-prose h2,
-[data-item-type="ministry_visit"] .ledgr-prose h3 {
+[data-item-type="ministry_visit"] .ledgr-prose h3,
+[data-item-type="sermon_note"] .ledgr-prose h1,
+[data-item-type="sermon_note"] .ledgr-prose h2,
+[data-item-type="sermon_note"] .ledgr-prose h3 {
   color: #60a5fa;
 }
 :root[data-theme="light"] [data-item-type="ministry_visit"] .ledgr-prose h1,
 :root[data-theme="light"] [data-item-type="ministry_visit"] .ledgr-prose h2,
-:root[data-theme="light"] [data-item-type="ministry_visit"] .ledgr-prose h3 {
+:root[data-theme="light"] [data-item-type="ministry_visit"] .ledgr-prose h3,
+:root[data-theme="light"] [data-item-type="sermon_note"] .ledgr-prose h1,
+:root[data-theme="light"] [data-item-type="sermon_note"] .ledgr-prose h2,
+:root[data-theme="light"] [data-item-type="sermon_note"] .ledgr-prose h3 {
   color: #1d4ed8;
 }
 
