@@ -5,14 +5,49 @@ import { asUuid } from "@/lib/api";
 import {
   applyTemplateToExisting,
   createItemFromTemplate,
+  createTemplate,
+  createTemplateFromItem,
   listTemplates,
+  updateTemplate,
   templateAskLabels,
 } from "@/lib/templates";
-import { optEnum, optString, optStringRecord } from "./args";
+import { optEnum, optString, optStringRecord, reqString } from "./args";
 import { rowView } from "./serializers";
 import type { McpTool } from "./wire";
 
 export const templateTools: McpTool[] = [
+  {
+    name: "create_template",
+    title: "Create a template",
+    description:
+      "Create an item template for a type (John, 2026-11-17: a new type needs its " +
+      "template without a browser login). Either pass `fromItemId` to clone an existing " +
+      "item (its title, body, properties, subtasks) into a hidden prototype, or omit it " +
+      "to get an EMPTY prototype you then shape with update_item on the returned " +
+      "prototypeItemId. A title/body may carry {{ask:Label}} prompts. `isDefault` makes " +
+      "it the type's default template.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        type: { type: "string", description: "Type key the template is for (ignored with fromItemId)." },
+        name: { type: "string", description: "Template name shown in the New chooser." },
+        fromItemId: { type: "string", description: "Optional: an existing item id (UUID) to clone into the prototype." },
+        isDefault: { type: "boolean", description: "Make this the type's default template." },
+      },
+      required: ["name"],
+      additionalProperties: false,
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+    handler: async (ownerId, args) => {
+      const name = reqString(args, "name");
+      const from = optString(args, "fromItemId");
+      let t = from
+        ? await createTemplateFromItem(ownerId, asUuid(from, "fromItemId"), name)
+        : await createTemplate(ownerId, { type: reqString(args, "type"), name });
+      if (args.isDefault === true) t = await updateTemplate(ownerId, t.id, { isDefault: true });
+      return { id: t.id, type: t.type, name: t.name, isDefault: t.isDefault, prototypeItemId: t.prototypeItemId };
+    },
+  },
   {
     name: "list_templates",
     title: "List templates",
