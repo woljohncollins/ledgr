@@ -1,6 +1,7 @@
 // Priority P1–P6 (ADR-096) — pure verification of the vocab/codec. No DB.
 // Run: npx tsx scripts/verify-priority.mts
 const {
+  ALL_PRIORITIES,
   PRIORITIES,
   isPriority,
   toPriority,
@@ -17,7 +18,10 @@ function check(name: string, ok: boolean, detail = "") {
   if (!ok) failures += 1;
 }
 
-check("PRIORITIES is 1..6", JSON.stringify([...PRIORITIES]) === "[1,2,3,4,5,6]");
+// The column holds P1..P6, but the pickers only offer P1..P3 (John, 2026-09-29: they map to
+// Outlook High / Normal / Low). Two constants, two checks.
+check("ALL_PRIORITIES is 1..6 (everything the column can hold)", JSON.stringify([...ALL_PRIORITIES]) === "[1,2,3,4,5,6]");
+check("PRIORITIES is 1..3 (what the pickers offer)", JSON.stringify([...PRIORITIES]) === "[1,2,3]");
 check("isPriority accepts 1..6", [1, 2, 3, 4, 5, 6].every(isPriority));
 check("isPriority rejects 0/7/null/'3'", ![0, 7, null, "3"].some((x) => isPriority(x)));
 
