@@ -1,12 +1,15 @@
 # Weekly pg_dump of the Neon DB (runbook §4) + the tested-restore proof.
 #
 # Two jobs:
-#   backup       — weekly cron + manual: pg_dump -Fc, uploaded to OneDrive
-#                  /Ledgr/Backups/ (private). The repo is PUBLIC (ADR-101) and
-#                  GitHub artifacts on a public repo are downloadable by any
-#                  signed-in user, so the dump is NOT kept as an artifact —
-#                  OneDrive is the sole destination and a missing Graph secret
-#                  fails the run loudly (ADR-103).
+#   backup       — weekly cron + manual: pg_dump -Fc, sent to one or both of:
+#                    1. OneDrive /Ledgr/Backups/ (private), when the four Graph
+#                       secrets are set.
+#                    2. A GitHub artifact, ENCRYPTED with AES-256 using the
+#                       BACKUP_PASSPHRASE secret, when that is set. The repo is
+#                       PUBLIC (ADR-101) and artifacts on a public repo are
+#                       downloadable by any signed-in user, so a plain dump is
+#                       NEVER uploaded: only the encrypted file is (ADR-294).
+#                  If neither destination is configured the run fails loudly.
 #   restore-test — manual only: dumps production, restores into a throwaway
 #                  Postgres container, and compares per-table row counts.
 #                  "An untested backup is a hope, not a backup."
@@ -70,17 +73,63 @@ jobs:
           # or HTML-error file must fail loudly here, not at restore time.
           head -c 5 "ledgr-$STAMP.dump" | grep -q "PGDMP"
 
-      - name: Copy to OneDrive /Ledgr/Backups (sole destination — no public artifact)
+      # Which destinations are configured? At least one is required: a run that
+      # produces no stored backup must fail rather than look green.
+      - name: Choose where the dump goes
+        id: dest
+        env:
+          GRAPH_TENANT_ID: ${{ secrets.GRAPH_TENANT_ID }}
+          GRAPH_CLIENT_ID: ${{ secrets.GRAPH_CLIENT_ID }}
+          GRAPH_CLIENT_SECRET: ${{ secrets.GRAPH_CLIENT_SECRET }}
+          ONEDRIVE_EXPORT_UPN: ${{ secrets.ONEDRIVE_EXPORT_UPN }}
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          onedrive=false
+          artifact=false
+          if [ -n "$GRAPH_TENANT_ID" ] && [ -n "$GRAPH_CLIENT_ID" ] && [ -n "$GRAPH_CLIENT_SECRET" ] && [ -n "$ONEDRIVE_EXPORT_UPN" ]; then onedrive=true; fi
+          if [ -n "$BACKUP_PASSPHRASE" ]; then artifact=true; fi
+          echo "onedrive=$onedrive" >> "$GITHUB_OUTPUT"
+          echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
+          echo "OneDrive copy: $onedrive; encrypted GitHub artifact: $artifact"
+          if [ "$onedrive" = false ] && [ "$artifact" = false ]; then
+            echo "::error::No backup destination is configured. Set the four Graph secrets (GRAPH_TENANT_ID/GRAPH_CLIENT_ID/GRAPH_CLIENT_SECRET/ONEDRIVE_EXPORT_UPN) for OneDrive and/or BACKUP_PASSPHRASE for an encrypted GitHub artifact (runbook §4). A plain dump is never kept as an artifact: the repo is public (ADR-103, ADR-294)."
+            exit 1
+          fi
+
+      # The only form of the dump that is ever uploaded to GitHub. AES-256 with a
+      # passphrase held in the BACKUP_PASSPHRASE secret (and in the owner's password
+      # manager); without it the file is unreadable, so the public repo is safe.
+      - name: Encrypt the dump (AES-256)
+        if: steps.dest.outputs.artifact == 'true'
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          printf '%s' "$BACKUP_PASSPHRASE" | gpg --batch --yes --pinentry-mode loopback --passphrase-fd 0 \
+            --symmetric --cipher-algo AES256 --output "ledgr-$STAMP.dump.gpg" "ledgr-$STAMP.dump"
+          ls -la "ledgr-$STAMP.dump.gpg"
+          # Prove it decrypts back to a real dump before trusting it.
+          printf '%s' "$BACKUP_PASSPHRASE" | gpg --batch --pinentry-mode loopback --passphrase-fd 0 \
+            --decrypt "ledgr-$STAMP.dump.gpg" | head -c 5 | grep -q "PGDMP"
+          # The encrypted file must not start with the plain-dump magic bytes.
+          ! head -c 5 "ledgr-$STAMP.dump.gpg" | grep -q "PGDMP"
+
+      - name: Keep the encrypted dump as a GitHub artifact (90 days)
+        if: steps.dest.outputs.artifact == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ledgr-backup-${{ env.STAMP }}
+          path: ledgr-${{ env.STAMP }}.dump.gpg
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Copy to OneDrive /Ledgr/Backups (private)
+        if: steps.dest.outputs.onedrive == 'true'
         env:
           GRAPH_TENANT_ID: ${{ secrets.GRAPH_TENANT_ID }}
           GRAPH_CLIENT_ID: ${{ secrets.GRAPH_CLIENT_ID }}
           GRAPH_CLIENT_SECRET: ${{ secrets.GRAPH_CLIENT_SECRET }}
           ONEDRIVE_EXPORT_UPN: ${{ secrets.ONEDRIVE_EXPORT_UPN }}
         run: |
-          if [ -z "$GRAPH_TENANT_ID" ] || [ -z "$GRAPH_CLIENT_ID" ] || [ -z "$GRAPH_CLIENT_SECRET" ] || [ -z "$ONEDRIVE_EXPORT_UPN" ]; then
-            echo "::error::Graph secrets not configured — OneDrive is the only backup destination (no public artifact, ADR-103), so the run fails rather than silently produce no backup. Set GRAPH_TENANT_ID/GRAPH_CLIENT_ID/GRAPH_CLIENT_SECRET/ONEDRIVE_EXPORT_UPN as Actions secrets (runbook §1b/§4)."
-            exit 1
-          fi
           TOKEN=$(curl -fsS -X POST \
             "https://login.microsoftonline.com/$GRAPH_TENANT_ID/oauth2/v2.0/token" \
             -d "client_id=$GRAPH_CLIENT_ID" \
