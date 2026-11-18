@@ -206,6 +206,9 @@ export default function AddTaskCard({
   // (Brandon, 2026-08-28 — "add groups just as easily as person").
   const [pick, setPick] = useState<{ type: string; q: string } | null>(null);
   const [pickHits, setPickHits] = useState<{ id: string; title: string }[]>([]);
+  // Outlook contacts (person chip only): the directory the PC bridge exports.
+  type PickContact = { id: string; name: string; email: string | null; phone: string | null; company: string | null; title: string | null };
+  const [contactHits, setContactHits] = useState<PickContact[]>([]);
   // The kebab (⋯): any OTHER custom property on the task type, set at creation.
   // Schema loads on first open; opened keys render small per-kind editors whose
   // values land in the POST's properties.
@@ -311,6 +314,13 @@ export default function AddTaskCard({
         if (!res.ok) return;
         const d = (await res.json()) as { items: { id: string; title: string }[] };
         setPickHits(Array.isArray(d.items) ? d.items : []);
+        if (pick.type === "person" && q) {
+          const cres = await fetch(`/api/contacts/search?q=${encodeURIComponent(q)}`, { signal: ctrl.signal });
+          const cd = cres.ok ? ((await cres.json()) as { hits?: PickContact[] }) : null;
+          setContactHits((cd?.hits ?? []).slice(0, 6));
+        } else {
+          setContactHits([]);
+        }
       } catch {
         // aborted or offline; the next keystroke retries
       }
@@ -986,7 +996,52 @@ export default function AddTaskCard({
                         {h.title || "Untitled"}
                       </button>
                     ))}
-                  {pickHits.length === 0 && (
+                  {lc.type === "person" &&
+                    (() => {
+                      const have = new Set(pickHits.map((h) => h.title.trim().toLowerCase()));
+                      const rows = contactHits.filter((c) => !have.has(c.name.trim().toLowerCase()));
+                      return rows.length > 0 ? (
+                        <>
+                          <span className="block px-2 pb-0.5 pt-1 text-[10px] font-semibold uppercase tracking-wide text-neutral-500">
+                            From Outlook contacts
+                          </span>
+                          {rows.map((c) => (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={async () => {
+                                // Make the person (details filled from the contact), then link as usual.
+                                const properties: Record<string, unknown> = { outlookid: c.id };
+                                if (c.email) properties.email = c.email;
+                                if (c.phone) properties.phone = c.phone;
+                                if (c.company) properties.church = c.company;
+                                if (c.title) properties.role = c.title;
+                                try {
+                                  const res = await fetch("/api/items", {
+                                    method: "POST",
+                                    headers: { "Content-Type": "application/json" },
+                                    body: JSON.stringify({ type: "person", title: c.name, properties }),
+                                  });
+                                  if (!res.ok) throw new Error(String(res.status));
+                                  const { item } = (await res.json()) as { item: { id: string } };
+                                  setLinked((cur) => [...cur, { id: item.id, title: c.name, type: lc.type }]);
+                                  setPick(null);
+                                } catch {
+                                  showToast("Couldn't add that contact");
+                                }
+                              }}
+                              className="flex w-full flex-col items-start rounded px-2 py-1 text-left text-sm text-neutral-300 hover:bg-neutral-800"
+                            >
+                              <span className="max-w-full truncate">{c.name}</span>
+                              <span className="max-w-full truncate text-xs text-neutral-500">
+                                {[c.company, c.title, c.email].filter(Boolean).join(" · ")}
+                              </span>
+                            </button>
+                          ))}
+                        </>
+                      ) : null;
+                    })()}
+                  {pickHits.length === 0 && !(lc.type === "person" && contactHits.length > 0) && (
                     <span className="block px-2 py-1 text-xs text-neutral-600">No matches.</span>
                   )}
                 </span>
